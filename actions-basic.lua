@@ -15,12 +15,20 @@ Actions.lastAction = "None"
 function Actions.Jump()
    if not player.Character then return false end
    local hum = player.Character:FindFirstChild("Humanoid")
-   if hum then
-      hum.Jump = true
-      Actions.lastAction = "Jump"
-      return true
-   end
-   return false
+   if not hum then return false end
+   
+   -- Check if character is grounded before jumping
+   local root = player.Character:FindFirstChild("HumanoidRootPart")
+   if not root then return false end
+   
+   -- Set jump state
+   hum.Jump = true
+   Actions.lastAction = "Jump"
+   
+   -- Small delay to let jump register
+   task.wait(0.1)
+   
+   return true
 end
 
 -- SIT
@@ -51,26 +59,44 @@ end
 function Actions.Dance()
    if not player.Character then return false end
    local hum = player.Character:FindFirstChild("Humanoid")
-   if hum then
-      local success = pcall(function()
-         hum:PlayEmote("dance")
+   if not hum then return false end
+   
+   -- Try multiple dance emote names
+   local danceEmotes = {"dance", "dance1", "dance2", "dance3"}
+   
+   for _, emoteName in ipairs(danceEmotes) do
+      local success, err = pcall(function()
+         local emote = hum:FindFirstChild("Animator")
+         if emote then
+            hum:PlayEmote(emoteName)
+         end
       end)
+      
       if success then
          Actions.lastAction = "Dance"
+         print("Dance emote played:", emoteName)
          return true
       end
-      -- Try dance1, dance2, dance3
-      for i = 1, 3 do
-         success = pcall(function()
-            hum:PlayEmote("dance" .. i)
-         end)
-         if success then
-            Actions.lastAction = "Dance"
-            return true
+   end
+   
+   -- Fallback: try loading default dance animation
+   local success = pcall(function()
+      local animate = player.Character:FindFirstChild("Animate")
+      if animate then
+         local dance = animate:FindFirstChild("dance")
+         if dance then
+            local anim = dance:FindFirstChildOfClass("Animation")
+            if anim then
+               local track = hum:LoadAnimation(anim)
+               track:Play()
+               Actions.lastAction = "Dance"
+               return true
+            end
          end
       end
-   end
-   return false
+   end)
+   
+   return success
 end
 
 -- WAVE
