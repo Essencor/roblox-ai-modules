@@ -1,337 +1,417 @@
--- SS Hub - Actions Module v1.1
--- Simplified and optimized for Roblox executors
+-- ============================================
+-- SS Hub Actions Module v2.0 (Rethought)
+-- Reliable character control for AI chatbots
+-- ============================================
 
 local Actions = {}
-Actions.Version = "1.1"
+Actions.Version = "2.0"
+Actions.State = {
+    lastAction = "None",
+    isExecuting = false,
+    activeAnimations = {}
+}
 
--- Get services and player
+-- Get player
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
--- Status
-Actions.lastAction = "None"
+-- ============================================
+-- HELPER FUNCTIONS
+-- ============================================
 
--- JUMP
+local function GetCharacter()
+    return player and player.Character
+end
+
+local function GetHumanoid()
+    local char = GetCharacter()
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetRootPart()
+    local char = GetCharacter()
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+-- Log action with consistent format
+local function Log(action, status, details)
+    local msg = string.format("[Actions] %s: %s", action, status)
+    if details then
+        msg = msg .. " - " .. details
+    end
+    print(msg)
+end
+
+-- ============================================
+-- MOVEMENT ACTIONS
+-- ============================================
+
 function Actions.Jump()
-   print("[Actions] Jump called")
-   
-   if not player then
-      print("[Actions] Jump FAILED: No player")
-      return false
-   end
-   
-   if not player.Character then
-      print("[Actions] Jump FAILED: No character")
-      return false
-   end
-   
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if not hum then
-      print("[Actions] Jump FAILED: No humanoid")
-      return false
-   end
-   
-   -- Method 1: Direct Jump property
-   print("[Actions] Jump: Method 1 - Setting Jump = true")
-   hum.Jump = true
-   task.wait(0.05)
-   
-   -- Method 2: ChangeState to Jumping
-   print("[Actions] Jump: Method 2 - ChangeState")
-   pcall(function()
-      hum:ChangeState(Enum.HumanoidStateType.Jumping)
-   end)
-   task.wait(0.05)
-   
-   -- Method 3: Apply upward velocity
-   print("[Actions] Jump: Method 3 - BodyVelocity")
-   local root = player.Character:FindFirstChild("HumanoidRootPart")
-   if root then
-      pcall(function()
-         local bv = Instance.new("BodyVelocity")
-         bv.MaxForce = Vector3.new(0, math.huge, 0)
-         bv.Velocity = Vector3.new(0, 50, 0)
-         bv.Parent = root
-         game:GetService("Debris"):AddItem(bv, 0.1)
-      end)
-   end
-   
-   Actions.lastAction = "Jump"
-   print("[Actions] Jump COMPLETED (attempted all methods)")
-   
-   return true
+    Log("Jump", "Started")
+    
+    local hum = GetHumanoid()
+    local root = GetRootPart()
+    
+    if not hum or not root then
+        Log("Jump", "Failed", "Missing humanoid or root")
+        return false
+    end
+    
+    -- Try multiple jump methods for compatibility
+    local jumped = false
+    
+    -- Method 1: Standard Jump
+    hum.Jump = true
+    task.wait(0.05)
+    
+    -- Method 2: State change
+    pcall(function()
+        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    end)
+    task.wait(0.05)
+    
+    -- Method 3: Physics impulse (most reliable)
+    pcall(function()
+        local AssemblyLinearVelocity = root.AssemblyLinearVelocity
+        root.AssemblyLinearVelocity = Vector3.new(
+            AssemblyLinearVelocity.X,
+            50,
+            AssemblyLinearVelocity.Z
+        )
+    end)
+    
+    Actions.State.lastAction = "Jump"
+    Log("Jump", "Completed")
+    return true
 end
 
--- SIT
 function Actions.Sit()
-   if not player.Character then return false end
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if hum then
-      hum.Sit = true
-      Actions.lastAction = "Sit"
-      return true
-   end
-   return false
+    Log("Sit", "Started")
+    
+    local hum = GetHumanoid()
+    if not hum then
+        Log("Sit", "Failed", "No humanoid")
+        return false
+    end
+    
+    hum.Sit = true
+    Actions.State.lastAction = "Sit"
+    Log("Sit", "Completed")
+    return true
 end
 
--- STAND
 function Actions.Stand()
-   if not player.Character then return false end
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if hum then
-      hum.Sit = false
-      Actions.lastAction = "Stand"
-      return true
-   end
-   return false
+    Log("Stand", "Started")
+    
+    local hum = GetHumanoid()
+    if not hum then
+        Log("Stand", "Failed", "No humanoid")
+        return false
+    end
+    
+    hum.Sit = false
+    Actions.State.lastAction = "Stand"
+    Log("Stand", "Completed")
+    return true
 end
 
--- DANCE (stores animation track for stopping)
-Actions.currentDanceTrack = nil
+function Actions.WalkTo(position)
+    Log("WalkTo", "Started", tostring(position))
+    
+    local hum = GetHumanoid()
+    if not hum then
+        Log("WalkTo", "Failed", "No humanoid")
+        return false
+    end
+    
+    if typeof(position) ~= "Vector3" then
+        Log("WalkTo", "Failed", "Invalid position type")
+        return false
+    end
+    
+    hum:MoveTo(position)
+    Actions.State.lastAction = "WalkTo"
+    Log("WalkTo", "Completed")
+    return true
+end
+
+function Actions.WalkToPlayer(playerName)
+    Log("WalkToPlayer", "Started", playerName)
+    
+    local target = Players:FindFirstChild(playerName)
+    if not target or not target.Character then
+        Log("WalkToPlayer", "Failed", "Player not found or no character")
+        return false
+    end
+    
+    local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then
+        Log("WalkToPlayer", "Failed", "Target has no root part")
+        return false
+    end
+    
+    return Actions.WalkTo(targetRoot.Position)
+end
+
+function Actions.Stop()
+    Log("Stop", "Started")
+    
+    local hum = GetHumanoid()
+    local root = GetRootPart()
+    
+    if not hum or not root then
+        Log("Stop", "Failed", "Missing humanoid or root")
+        return false
+    end
+    
+    hum:MoveTo(root.Position)
+    Actions.State.lastAction = "Stop"
+    Log("Stop", "Completed")
+    return true
+end
+
+-- ============================================
+-- EMOTE ACTIONS
+-- ============================================
+
+function Actions.PlayEmote(emoteName)
+    Log("PlayEmote", "Started", emoteName)
+    
+    local hum = GetHumanoid()
+    if not hum then
+        Log("PlayEmote", "Failed", "No humanoid")
+        return false
+    end
+    
+    local success = pcall(function()
+        hum:PlayEmote(emoteName)
+    end)
+    
+    if success then
+        Actions.State.lastAction = "Emote: " .. emoteName
+        Log("PlayEmote", "Completed", emoteName)
+        return true
+    else
+        Log("PlayEmote", "Failed", "Emote not available: " .. emoteName)
+        return false
+    end
+end
 
 function Actions.Dance()
-   print("[Actions] Dance called")
-   
-   if not player.Character then
-      print("[Actions] Dance FAILED: No character")
-      return false
-   end
-   
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if not hum then
-      print("[Actions] Dance FAILED: No humanoid")
-      return false
-   end
-   
-   -- Stop any previous dance
-   if Actions.currentDanceTrack then
-      Actions.currentDanceTrack:Stop()
-      Actions.currentDanceTrack = nil
-   end
-   
-   print("[Actions] Dance: Method 1 - PlayEmote")
-   -- Try PlayEmote (like /e dance)
-   local success = pcall(function()
-      hum:PlayEmote("dance")
-   end)
-   
-   if success then
-      Actions.lastAction = "Dance"
-      print("[Actions] Dance COMPLETED via PlayEmote")
-      return true
-   end
-   
-   -- Fallback: Load and play dance animation
-   print("[Actions] Dance: Method 2 - Animation")
-   local animateSuccess = pcall(function()
-      local animate = player.Character:FindFirstChild("Animate")
-      if animate then
-         local dance = animate:FindFirstChild("dance")
-         if dance then
-            local anim = dance:FindFirstChildOfClass("Animation")
+    Log("Dance", "Started")
+    
+    -- Stop any existing dance
+    if Actions.State.activeAnimations.dance then
+        Actions.StopDance()
+    end
+    
+    local hum = GetHumanoid()
+    if not hum then
+        Log("Dance", "Failed", "No humanoid")
+        return false
+    end
+    
+    -- Try PlayEmote first (works like /e dance)
+    local success = pcall(function()
+        hum:PlayEmote("dance")
+    end)
+    
+    if success then
+        Actions.State.lastAction = "Dance"
+        Log("Dance", "Completed via PlayEmote")
+        return true
+    end
+    
+    -- Fallback: Load animation manually
+    local char = GetCharacter()
+    if not char then return false end
+    
+    local animate = char:FindFirstChild("Animate")
+    if animate then
+        local danceFolder = animate:FindFirstChild("dance")
+        if danceFolder then
+            local anim = danceFolder:FindFirstChildOfClass("Animation")
             if anim then
-               local track = hum:LoadAnimation(anim)
-               track:Play()
-               Actions.currentDanceTrack = track
-               Actions.lastAction = "Dance"
-               print("[Actions] Dance COMPLETED via animation")
-               return true
+                local track = hum:LoadAnimation(anim)
+                track:Play()
+                Actions.State.activeAnimations.dance = track
+                Actions.State.lastAction = "Dance"
+                Log("Dance", "Completed via Animation")
+                return true
             end
-         end
-      end
-   end)
-   
-   if animateSuccess then
-      return true
-   end
-   
-   print("[Actions] Dance FAILED: All methods exhausted")
-   return false
+        end
+    end
+    
+    Log("Dance", "Failed", "No dance animation found")
+    return false
 end
 
--- STOP DANCE
 function Actions.StopDance()
-   print("[Actions] StopDance called")
-   
-   if Actions.currentDanceTrack then
-      Actions.currentDanceTrack:Stop()
-      Actions.currentDanceTrack = nil
-      print("[Actions] StopDance: Stopped animation track")
-   end
-   
-   if not player.Character then return false end
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if hum then
-      -- Stop any playing emotes
-      pcall(function()
-         hum:PlayEmote("idle")
-      end)
-      print("[Actions] StopDance: Set to idle")
-   end
-   
-   Actions.lastAction = "StopDance"
-   return true
+    Log("StopDance", "Started")
+    
+    if Actions.State.activeAnimations.dance then
+        Actions.State.activeAnimations.dance:Stop()
+        Actions.State.activeAnimations.dance = nil
+        Log("StopDance", "Stopped animation track")
+    end
+    
+    local hum = GetHumanoid()
+    if hum then
+        pcall(function()
+            hum:PlayEmote("idle")
+        end)
+        Log("StopDance", "Set to idle")
+    end
+    
+    Actions.State.lastAction = "StopDance"
+    return true
 end
 
--- WAVE
 function Actions.Wave()
-   if not player.Character then return false end
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if hum then
-      pcall(function() hum:PlayEmote("wave") end)
-      Actions.lastAction = "Wave"
-      return true
-   end
-   return false
+    return Actions.PlayEmote("wave")
 end
 
--- POINT
 function Actions.Point()
-   if not player.Character then return false end
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if hum then
-      pcall(function() hum:PlayEmote("point") end)
-      Actions.lastAction = "Point"
-      return true
-   end
-   return false
+    return Actions.PlayEmote("point")
 end
 
--- CHEER
 function Actions.Cheer()
-   if not player.Character then return false end
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if hum then
-      pcall(function() hum:PlayEmote("cheer") end)
-      Actions.lastAction = "Cheer"
-      return true
-   end
-   return false
+    return Actions.PlayEmote("cheer")
 end
 
--- LAUGH
 function Actions.Laugh()
-   if not player.Character then return false end
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if hum then
-      pcall(function() hum:PlayEmote("laugh") end)
-      Actions.lastAction = "Laugh"
-      return true
-   end
-   return false
+    return Actions.PlayEmote("laugh")
 end
 
--- WALK TO POSITION
-function Actions.WalkTo(position)
-   if not player.Character then return false end
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if hum and typeof(position) == "Vector3" then
-      hum:MoveTo(position)
-      Actions.lastAction = "WalkTo"
-      return true
-   end
-   return false
-end
+-- ============================================
+-- TOOL ACTIONS
+-- ============================================
 
--- WALK TO PLAYER
-function Actions.WalkToPlayer(playerName)
-   local target = Players:FindFirstChild(playerName)
-   if not target or not target.Character then return false end
-   local root = target.Character:FindFirstChild("HumanoidRootPart")
-   if root then
-      return Actions.WalkTo(root.Position)
-   end
-   return false
-end
-
--- STOP
-function Actions.Stop()
-   if not player.Character then return false end
-   local hum = player.Character:FindFirstChild("Humanoid")
-   if hum then
-      hum:MoveTo(player.Character.HumanoidRootPart.Position)
-      Actions.lastAction = "Stop"
-      return true
-   end
-   return false
-end
-
--- EQUIP TOOL
 function Actions.EquipTool(toolName)
-   local backpack = player:FindFirstChild("Backpack")
-   if not backpack then return false end
-   local tool = backpack:FindFirstChild(toolName)
-   if tool and player.Character then
-      local hum = player.Character:FindFirstChild("Humanoid")
-      if hum then
-         hum:EquipTool(tool)
-         Actions.lastAction = "Equipped: " .. toolName
-         return true
-      end
-   end
-   return false
+    Log("EquipTool", "Started", toolName)
+    
+    local char = GetCharacter()
+    local backpack = player and player:FindFirstChild("Backpack")
+    
+    if not char or not backpack then
+        Log("EquipTool", "Failed", "No character or backpack")
+        return false
+    end
+    
+    local tool = backpack:FindFirstChild(toolName)
+    if not tool then
+        Log("EquipTool", "Failed", "Tool not found: " .. toolName)
+        return false
+    end
+    
+    local hum = GetHumanoid()
+    if hum then
+        hum:EquipTool(tool)
+        Actions.State.lastAction = "Equipped: " .. toolName
+        Log("EquipTool", "Completed", toolName)
+        return true
+    end
+    
+    return false
 end
 
--- UNEQUIP TOOL
 function Actions.UnequipTool()
-   if not player.Character then return false end
-   local tool = player.Character:FindFirstChildOfClass("Tool")
-   if tool then
-      local backpack = player:FindFirstChild("Backpack")
-      if backpack then
-         tool.Parent = backpack
-         Actions.lastAction = "Unequipped tool"
-         return true
-      end
-   end
-   return false
+    Log("UnequipTool", "Started")
+    
+    local char = GetCharacter()
+    if not char then
+        Log("UnequipTool", "Failed", "No character")
+        return false
+    end
+    
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool then
+        Log("UnequipTool", "Nothing equipped")
+        return false
+    end
+    
+    local backpack = player and player:FindFirstChild("Backpack")
+    if backpack then
+        tool.Parent = backpack
+        Actions.State.lastAction = "Unequipped: " .. tool.Name
+        Log("UnequipTool", "Completed", tool.Name)
+        return true
+    end
+    
+    return false
 end
 
--- USE TOOL
 function Actions.UseTool()
-   if not player.Character then return false end
-   local tool = player.Character:FindFirstChildOfClass("Tool")
-   if tool then
-      pcall(function() tool:Activate() end)
-      Actions.lastAction = "Used: " .. tool.Name
-      return true
-   end
-   return false
+    Log("UseTool", "Started")
+    
+    local char = GetCharacter()
+    if not char then
+        Log("UseTool", "Failed", "No character")
+        return false
+    end
+    
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool then
+        Log("UseTool", "Failed", "No tool equipped")
+        return false
+    end
+    
+    pcall(function()
+        tool:Activate()
+    end)
+    
+    Actions.State.lastAction = "Used: " .. tool.Name
+    Log("UseTool", "Completed", tool.Name)
+    return true
 end
 
--- LIST TOOLS
 function Actions.ListTools()
-   local tools = {}
-   local backpack = player:FindFirstChild("Backpack")
-   if backpack then
-      for _, item in ipairs(backpack:GetChildren()) do
-         if item:IsA("Tool") then
-            table.insert(tools, item.Name)
-         end
-      end
-   end
-   return tools
+    local tools = {}
+    local backpack = player and player:FindFirstChild("Backpack")
+    
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                table.insert(tools, item.Name)
+            end
+        end
+    end
+    
+    return tools
 end
 
--- GET STATUS
+-- ============================================
+-- UTILITY FUNCTIONS
+-- ============================================
+
 function Actions.GetStatus()
-   return {
-      lastAction = Actions.lastAction,
-      hasCharacter = player.Character ~= nil,
-      isAlive = player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0
-   }
+    local hum = GetHumanoid()
+    return {
+        lastAction = Actions.State.lastAction,
+        isExecuting = Actions.State.isExecuting,
+        hasCharacter = GetCharacter() ~= nil,
+        isAlive = hum and hum.Health > 0 or false,
+        health = hum and hum.Health or 0
+    }
 end
 
--- GET AVAILABLE ACTIONS
 function Actions.GetAvailableActions()
-   return {
-      Movement = {"Jump", "Sit", "Stand", "WalkTo", "WalkToPlayer", "Stop"},
-      Emotes = {"Dance", "StopDance", "Wave", "Point", "Cheer", "Laugh"},
-      Tools = {"EquipTool", "UnequipTool", "UseTool", "ListTools"},
-      Utility = {"GetStatus", "GetAvailableActions"}
-   }
+    return {
+        Movement = {"Jump", "Sit", "Stand", "WalkTo", "WalkToPlayer", "Stop"},
+        Emotes = {"Dance", "StopDance", "Wave", "Point", "Cheer", "Laugh", "PlayEmote"},
+        Tools = {"EquipTool", "UnequipTool", "UseTool", "ListTools"},
+        Utility = {"GetStatus", "GetAvailableActions"}
+    }
 end
 
-print("SS Hub Actions Module v" .. Actions.Version .. " loaded")
+-- ============================================
+-- MODULE INITIALIZATION
+-- ============================================
+
+print("========================================")
+print("SS Hub Actions Module v" .. Actions.Version)
+print("Status: Ready")
+print("Character:", GetCharacter() and "Found" or "Not found")
+print("========================================")
 
 return Actions
