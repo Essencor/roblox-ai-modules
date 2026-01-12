@@ -31,17 +31,33 @@ function Actions.Jump()
       return false
    end
    
+   -- Method 1: Direct Jump property
+   print("[Actions] Jump: Method 1 - Setting Jump = true")
+   hum.Jump = true
+   task.wait(0.05)
+   
+   -- Method 2: ChangeState to Jumping
+   print("[Actions] Jump: Method 2 - ChangeState")
+   pcall(function()
+      hum:ChangeState(Enum.HumanoidStateType.Jumping)
+   end)
+   task.wait(0.05)
+   
+   -- Method 3: Apply upward velocity
+   print("[Actions] Jump: Method 3 - BodyVelocity")
    local root = player.Character:FindFirstChild("HumanoidRootPart")
-   if not root then
-      print("[Actions] Jump FAILED: No HumanoidRootPart")
-      return false
+   if root then
+      pcall(function()
+         local bv = Instance.new("BodyVelocity")
+         bv.MaxForce = Vector3.new(0, math.huge, 0)
+         bv.Velocity = Vector3.new(0, 50, 0)
+         bv.Parent = root
+         game:GetService("Debris"):AddItem(bv, 0.1)
+      end)
    end
    
-   print("[Actions] Jump: Setting Jump = true")
-   hum.Jump = true
-   
    Actions.lastAction = "Jump"
-   print("[Actions] Jump COMPLETED")
+   print("[Actions] Jump COMPLETED (attempted all methods)")
    
    return true
 end
@@ -70,7 +86,9 @@ function Actions.Stand()
    return false
 end
 
--- DANCE
+-- DANCE (stores animation track for stopping)
+Actions.currentDanceTrack = nil
+
 function Actions.Dance()
    print("[Actions] Dance called")
    
@@ -85,28 +103,27 @@ function Actions.Dance()
       return false
    end
    
-   print("[Actions] Dance: Trying emotes...")
-   
-   -- Try multiple dance emote names
-   local danceEmotes = {"dance", "dance1", "dance2", "dance3"}
-   
-   for _, emoteName in ipairs(danceEmotes) do
-      local success, err = pcall(function()
-         hum:PlayEmote(emoteName)
-      end)
-      
-      if success then
-         Actions.lastAction = "Dance"
-         print("[Actions] Dance COMPLETED with emote:", emoteName)
-         return true
-      else
-         print("[Actions] Dance: Emote failed:", emoteName, err)
-      end
+   -- Stop any previous dance
+   if Actions.currentDanceTrack then
+      Actions.currentDanceTrack:Stop()
+      Actions.currentDanceTrack = nil
    end
    
-   -- Fallback: try loading default dance animation
-   print("[Actions] Dance: Trying animation fallback...")
-   local success, err = pcall(function()
+   print("[Actions] Dance: Method 1 - PlayEmote")
+   -- Try PlayEmote (like /e dance)
+   local success = pcall(function()
+      hum:PlayEmote("dance")
+   end)
+   
+   if success then
+      Actions.lastAction = "Dance"
+      print("[Actions] Dance COMPLETED via PlayEmote")
+      return true
+   end
+   
+   -- Fallback: Load and play dance animation
+   print("[Actions] Dance: Method 2 - Animation")
+   local animateSuccess = pcall(function()
       local animate = player.Character:FindFirstChild("Animate")
       if animate then
          local dance = animate:FindFirstChild("dance")
@@ -115,6 +132,7 @@ function Actions.Dance()
             if anim then
                local track = hum:LoadAnimation(anim)
                track:Play()
+               Actions.currentDanceTrack = track
                Actions.lastAction = "Dance"
                print("[Actions] Dance COMPLETED via animation")
                return true
@@ -123,12 +141,36 @@ function Actions.Dance()
       end
    end)
    
-   if not success then
-      print("[Actions] Dance FAILED: Animation fallback failed:", err)
+   if animateSuccess then
+      return true
    end
    
    print("[Actions] Dance FAILED: All methods exhausted")
    return false
+end
+
+-- STOP DANCE
+function Actions.StopDance()
+   print("[Actions] StopDance called")
+   
+   if Actions.currentDanceTrack then
+      Actions.currentDanceTrack:Stop()
+      Actions.currentDanceTrack = nil
+      print("[Actions] StopDance: Stopped animation track")
+   end
+   
+   if not player.Character then return false end
+   local hum = player.Character:FindFirstChild("Humanoid")
+   if hum then
+      -- Stop any playing emotes
+      pcall(function()
+         hum:PlayEmote("idle")
+      end)
+      print("[Actions] StopDance: Set to idle")
+   end
+   
+   Actions.lastAction = "StopDance"
+   return true
 end
 
 -- WAVE
@@ -284,7 +326,7 @@ end
 function Actions.GetAvailableActions()
    return {
       Movement = {"Jump", "Sit", "Stand", "WalkTo", "WalkToPlayer", "Stop"},
-      Emotes = {"Dance", "Wave", "Point", "Cheer", "Laugh"},
+      Emotes = {"Dance", "StopDance", "Wave", "Point", "Cheer", "Laugh"},
       Tools = {"EquipTool", "UnequipTool", "UseTool", "ListTools"},
       Utility = {"GetStatus", "GetAvailableActions"}
    }
