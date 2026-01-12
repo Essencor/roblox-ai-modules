@@ -13,20 +13,35 @@ Actions.lastAction = "None"
 
 -- JUMP
 function Actions.Jump()
-   if not player.Character then return false end
+   print("[Actions] Jump called")
+   
+   if not player then
+      print("[Actions] Jump FAILED: No player")
+      return false
+   end
+   
+   if not player.Character then
+      print("[Actions] Jump FAILED: No character")
+      return false
+   end
+   
    local hum = player.Character:FindFirstChild("Humanoid")
-   if not hum then return false end
+   if not hum then
+      print("[Actions] Jump FAILED: No humanoid")
+      return false
+   end
    
-   -- Check if character is grounded before jumping
    local root = player.Character:FindFirstChild("HumanoidRootPart")
-   if not root then return false end
+   if not root then
+      print("[Actions] Jump FAILED: No HumanoidRootPart")
+      return false
+   end
    
-   -- Set jump state
+   print("[Actions] Jump: Setting Jump = true")
    hum.Jump = true
-   Actions.lastAction = "Jump"
    
-   -- Small delay to let jump register
-   task.wait(0.1)
+   Actions.lastAction = "Jump"
+   print("[Actions] Jump COMPLETED")
    
    return true
 end
@@ -57,30 +72,41 @@ end
 
 -- DANCE
 function Actions.Dance()
-   if not player.Character then return false end
+   print("[Actions] Dance called")
+   
+   if not player.Character then
+      print("[Actions] Dance FAILED: No character")
+      return false
+   end
+   
    local hum = player.Character:FindFirstChild("Humanoid")
-   if not hum then return false end
+   if not hum then
+      print("[Actions] Dance FAILED: No humanoid")
+      return false
+   end
+   
+   print("[Actions] Dance: Trying emotes...")
    
    -- Try multiple dance emote names
    local danceEmotes = {"dance", "dance1", "dance2", "dance3"}
    
    for _, emoteName in ipairs(danceEmotes) do
       local success, err = pcall(function()
-         local emote = hum:FindFirstChild("Animator")
-         if emote then
-            hum:PlayEmote(emoteName)
-         end
+         hum:PlayEmote(emoteName)
       end)
       
       if success then
          Actions.lastAction = "Dance"
-         print("Dance emote played:", emoteName)
+         print("[Actions] Dance COMPLETED with emote:", emoteName)
          return true
+      else
+         print("[Actions] Dance: Emote failed:", emoteName, err)
       end
    end
    
    -- Fallback: try loading default dance animation
-   local success = pcall(function()
+   print("[Actions] Dance: Trying animation fallback...")
+   local success, err = pcall(function()
       local animate = player.Character:FindFirstChild("Animate")
       if animate then
          local dance = animate:FindFirstChild("dance")
@@ -90,13 +116,19 @@ function Actions.Dance()
                local track = hum:LoadAnimation(anim)
                track:Play()
                Actions.lastAction = "Dance"
+               print("[Actions] Dance COMPLETED via animation")
                return true
             end
          end
       end
    end)
    
-   return success
+   if not success then
+      print("[Actions] Dance FAILED: Animation fallback failed:", err)
+   end
+   
+   print("[Actions] Dance FAILED: All methods exhausted")
+   return false
 end
 
 -- WAVE
