@@ -57,26 +57,36 @@ function Actions.Jump()
         return false
     end
     
-    -- Try multiple jump methods for compatibility
-    local jumped = false
-    
-    -- Method 1: Standard Jump
-    hum.Jump = true
-    task.wait(0.05)
-    
-    -- Method 2: State change
+    -- Check if character is on ground using raycast
+    local isGrounded = false
     pcall(function()
-        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        local rayOrigin = root.Position
+        local rayDirection = Vector3.new(0, -4, 0)
+        local raycastParams = RaycastParams.new()
+        raycastParams.FilterDescendantsInstances = {GetCharacter()}
+        raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+        
+        local rayResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+        isGrounded = rayResult ~= nil
     end)
-    task.wait(0.05)
     
-    -- Method 3: Physics impulse (most reliable)
+    if not isGrounded then
+        Log("Jump", "Skipped", "Not grounded")
+        return false
+    end
+    
+    -- Method 1: Standard Jump with proper reset
+    hum.Jump = true
+    task.wait(0.1)
+    hum.Jump = false  -- CRITICAL: Reset to prevent infinite jump
+    
+    -- Method 2: Physics impulse as backup
+    task.wait(0.05)
     pcall(function()
-        local AssemblyLinearVelocity = root.AssemblyLinearVelocity
         root.AssemblyLinearVelocity = Vector3.new(
-            AssemblyLinearVelocity.X,
+            root.AssemblyLinearVelocity.X,
             50,
-            AssemblyLinearVelocity.Z
+            root.AssemblyLinearVelocity.Z
         )
     end)
     
