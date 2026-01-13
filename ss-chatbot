@@ -45,7 +45,17 @@ end
 local LocalPlayer = Players.LocalPlayer
 
 -- Load Rayfield UI Library
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+print("[AI Chatbot] Loading Rayfield UI...")
+local success, Rayfield = pcall(function()
+   return loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+end)
+
+if not success or not Rayfield then
+   error("[AI Chatbot] Failed to load Rayfield UI library! Error: " .. tostring(Rayfield))
+   return
+end
+
+print("[AI Chatbot] Rayfield loaded successfully!")
 
 -- Create Main Window
 local Window = Rayfield:CreateWindow({
@@ -109,7 +119,7 @@ local AutoGreet = {
 -- Module URLs
 local ModuleURLs = {
    Actions = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/main/actions-basic.lua",
-   Pathfinding = "https://raw.githubusercontent.com/Essencor/pathfinding-module/refs/heads/main/pathfinding-complete.lua"
+   Pathfinding = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/refs/heads/main/pathfinding-module"
 }
 
 -- Loaded Modules Storage
