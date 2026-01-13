@@ -1,0 +1,1006 @@
+-- ============================================
+-- SS Hub Pathfinding Module v1.0
+-- Comprehensive navigation with learning system
+-- ============================================
+
+local Pathfinding = {}
+Pathfinding.Version = "1.0"
+
+-- Services
+local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+
+-- ============================================
+-- STATE MANAGEMENT
+-- ============================================
+
+Pathfinding.State = {
+    isNavigating = false,
+    isPaused = false,
+    currentPath = nil,
+    currentWaypoint = 1,
+    currentMode = "none",
+    targetPosition = nil,
+    targetName = nil,
+    
+    -- Learning system
+    learningDatabase = {},  -- Successful strategies
+    deathHistory = {},      -- Failed attempts
+    obbyCheckpoints = {},   -- Checkpoint positions
+    
+    -- Performance tracking
+    attempts = 0,
+    deaths = 0,
+    lastDeath = nil,
+    startTime = 0,
+    
+    -- Movement state
+    lastPosition = nil,
+    stuckTimer = 0,
+    stuckThreshold = 3,  -- Seconds before considering stuck
+    
+    -- Obby learning
+    jumpTimings = {},       -- [location] = optimal_timing
+    dangerZones = {},       -- [location] = danger_level
+    safeRoutes = {}         -- [start_end] = waypoints
+}
+
+-- ============================================
+-- CONFIGURATION
+-- ============================================
+
+local Config = {
+    -- Basic pathfinding
+    waypointReachedDistance = 3,
+    pathUpdateInterval = 0.5,
+    maxPathRetries = 3,
+    
+    -- Obby mode
+    obbyMaxAttempts = 10,
+    obbyLearningRate = 0.3,
+    checkpointInterval = 20,  -- studs
+    deathCooldown = 0.5,
+    
+    -- Advanced mode
+    advancedJumpPower = 50,
+    velocityPrediction = true,
+    platformPredictionTime = 2,
+    
+    -- Jump settings
+    jumpHeight = 7.2,
+    jumpDistance = 16,
+    runSpeed = 16,
+    
+    -- Detection
+    killbrickKeywords = {"kill", "death", "lava", "void", "damage"},
+    movingPartDetection = true,
+    gapDetectionRange = 20
+}
+
+-- ============================================
+-- HELPER FUNCTIONS
+-- ============================================
+
+local function Log(category, message, level)
+    level = level or "INFO"
+    local prefix = string.format("[Pathfinding:%s] %s:", category, level)
+    print(prefix, message)
+end
+
+local function GetCharacter()
+    return player and player.Character
+end
+
+local function GetHumanoid()
+    local char = GetCharacter()
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetRootPart()
+    local char = GetCharacter()
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function Distance2D(pos1, pos2)
+    return math.sqrt((pos1.X - pos2.X)^2 + (pos1.Z - pos2.Z)^2)
+end
+
+local function Distance3D(pos1, pos2)
+    return (pos1 - pos2).Magnitude
+end
+
+-- Check if character is on ground
+local function IsGrounded()
+    local root = GetRootPart()
+    if not root then return false end
+    
+    local rayOrigin = root.Position
+    local rayDirection = Vector3.new(0, -4, 0)
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {GetCharacter()}
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local result = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+    return result ~= nil
+end
+
+-- Detect if part is a killbrick
+local function IsKillbrick(part)
+    if not part then return false end
+    
+    local name = part.Name:lower()
+    for _, keyword in ipairs(Config.killbrickKeywords) do
+        if name:find(keyword) then
+            return true
+        end
+    end
+    
+    -- Check color (red parts often = death)
+    if part:IsA("BasePart") then
+        if part.BrickColor == BrickColor.new("Really red") or 
+           part.BrickColor == BrickColor.new("Bright red") then
+            return true
+        end
+    end
+    
+    return false
+end
+
+-- Detect moving parts
+local function IsMovingPart(part)
+    if not part or not part:IsA("BasePart") then return false end
+    
+    -- Check for BodyMover objects
+    for _, child in ipairs(part:GetChildren()) do
+        if child:IsA("BodyMover") or child:IsA("BodyPosition") or 
+           child:IsA("BodyVelocity") then
+            return true
+        end
+    end
+    
+    -- Check if part has velocity
+    if part.AssemblyLinearVelocity.Magnitude > 0.5 then
+        return true
+    end
+    
+    return false
+end
+
+-- Predict moving platform position
+local function PredictPlatformPosition(part, timeAhead)
+    if not IsMovingPart(part) then
+        return part.Position
+    end
+    
+    local velocity = part.AssemblyLinearVelocity
+    local currentPos = part.Position
+    local predictedPos = currentPos + (velocity * timeAhead)
+    
+    return predictedPos
+end
+
+-- Detect gap ahead
+local function DetectGap(fromPosition, direction, maxDistance)
+    maxDistance = maxDistance or Config.gapDetectionRange
+    
+    local rayOrigin = fromPosition + Vector3.new(0, 0.5, 0)
+    local rayDirection = direction.Unit * maxDistance
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {GetCharacter()}
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    -- Cast ray forward
+    local forwardResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+    
+    -- Cast ray down at forward position
+    if forwardResult then
+        local downOrigin = forwardResult.Position + Vector3.new(0, 0.5, 0)
+        local downDirection = Vector3.new(0, -10, 0)
+        local downResult = workspace:Raycast(downOrigin, downDirection, raycastParams)
+        
+        if not downResult then
+            return true, forwardResult.Position, nil
+        end
+    end
+    
+    return false, nil, nil
+end
+
+-- ============================================
+-- LEARNING SYSTEM
+-- ============================================
+
+-- Save successful strategy
+function Pathfinding.LearnSuccess(location, strategy, mode)
+    local key = string.format("%.0f_%.0f_%.0f", location.X, location.Y, location.Z)
+    
+    if not Pathfinding.State.learningDatabase[key] then
+        Pathfinding.State.learningDatabase[key] = {
+            location = location,
+            successes = {},
+            mode = mode
+        }
+    end
+    
+    table.insert(Pathfinding.State.learningDatabase[key].successes, {
+        strategy = strategy,
+        timestamp = tick()
+    })
+    
+    Log("Learning", string.format("Learned successful strategy at %s", key), "SUCCESS")
+end
+
+-- Record death
+function Pathfinding.RecordDeath(location, attemptedStrategy)
+    local key = string.format("%.0f_%.0f_%.0f", location.X, location.Y, location.Z)
+    
+    if not Pathfinding.State.deathHistory[key] then
+        Pathfinding.State.deathHistory[key] = {
+            location = location,
+            deaths = 0,
+            failedStrategies = {}
+        }
+    end
+    
+    Pathfinding.State.deathHistory[key].deaths = Pathfinding.State.deathHistory[key].deaths + 1
+    table.insert(Pathfinding.State.deathHistory[key].failedStrategies, attemptedStrategy)
+    
+    -- Mark as danger zone
+    Pathfinding.State.dangerZones[key] = Pathfinding.State.deathHistory[key].deaths
+    
+    Log("Learning", string.format("Recorded death #%d at %s", 
+        Pathfinding.State.deathHistory[key].deaths, key), "WARN")
+end
+
+-- Get best strategy for location
+function Pathfinding.GetBestStrategy(location)
+    local key = string.format("%.0f_%.0f_%.0f", location.X, location.Y, location.Z)
+    
+    local learned = Pathfinding.State.learningDatabase[key]
+    if learned and #learned.successes > 0 then
+        -- Return most recent successful strategy
+        return learned.successes[#learned.successes].strategy
+    end
+    
+    -- Check nearby locations (within 5 studs)
+    for savedKey, data in pairs(Pathfinding.State.learningDatabase) do
+        if Distance3D(data.location, location) < 5 then
+            if #data.successes > 0 then
+                return data.successes[#data.successes].strategy
+            end
+        end
+    end
+    
+    return nil
+end
+
+-- ============================================
+-- BASIC PATHFINDING MODE
+-- ============================================
+
+function Pathfinding.CreatePath(startPos, endPos)
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentCanClimb = false,
+        WaypointSpacing = 4,
+        Costs = {
+            Water = 20,
+            Danger = math.huge
+        }
+    })
+    
+    local success, errorMsg = pcall(function()
+        path:ComputeAsync(startPos, endPos)
+    end)
+    
+    if not success then
+        Log("Basic", "Path computation failed: " .. tostring(errorMsg), "ERROR")
+        return nil
+    end
+    
+    if path.Status == Enum.PathStatus.Success then
+        return path
+    else
+        Log("Basic", "Path status: " .. tostring(path.Status), "WARN")
+        return nil
+    end
+end
+
+function Pathfinding.FollowPath(path, mode)
+    mode = mode or "basic"
+    
+    local hum = GetHumanoid()
+    local root = GetRootPart()
+    
+    if not hum or not root or not path then
+        return false
+    end
+    
+    local waypoints = path:GetWaypoints()
+    Pathfinding.State.currentWaypoint = 1
+    
+    Log(mode:upper(), string.format("Following path with %d waypoints", #waypoints))
+    
+    for i, waypoint in ipairs(waypoints) do
+        if not Pathfinding.State.isNavigating then
+            Log(mode:upper(), "Navigation cancelled")
+            return false
+        end
+        
+        Pathfinding.State.currentWaypoint = i
+        
+        -- Move to waypoint
+        hum:MoveTo(waypoint.Position)
+        
+        -- Handle jump
+        if waypoint.Action == Enum.PathWaypointAction.Jump then
+            Log(mode:upper(), string.format("Jump required at waypoint %d", i))
+            
+            -- Wait for grounded before jumping
+            local jumpWait = 0
+            while not IsGrounded() and jumpWait < 2 do
+                task.wait(0.1)
+                jumpWait = jumpWait + 0.1
+            end
+            
+            if mode == "obby" then
+                -- Obby mode: check learned timing
+                local learned = Pathfinding.GetBestStrategy(waypoint.Position)
+                if learned and learned.jumpDelay then
+                    task.wait(learned.jumpDelay)
+                end
+            end
+            
+            hum.Jump = true
+            task.wait(0.1)
+            hum.Jump = false
+        end
+        
+        -- Wait to reach waypoint
+        local timeout = 0
+        local reached = false
+        
+        while timeout < 8 do
+            local currentRoot = GetRootPart()
+            if not currentRoot then break end
+            
+            local distance = Distance2D(currentRoot.Position, waypoint.Position)
+            
+            if distance < Config.waypointReachedDistance then
+                reached = true
+                break
+            end
+            
+            task.wait(0.1)
+            timeout = timeout + 0.1
+        end
+        
+        if not reached then
+            Log(mode:upper(), string.format("Timeout at waypoint %d", i), "WARN")
+            
+            if mode == "obby" then
+                -- Record as potential danger zone
+                Pathfinding.State.dangerZones[string.format("%.0f_%.0f_%.0f", 
+                    waypoint.Position.X, waypoint.Position.Y, waypoint.Position.Z)] = 
+                    (Pathfinding.State.dangerZones[string.format("%.0f_%.0f_%.0f", 
+                        waypoint.Position.X, waypoint.Position.Y, waypoint.Position.Z)] or 0) + 1
+            end
+        end
+    end
+    
+    hum:MoveTo(root.Position)  -- Stop moving
+    return true
+end
+
+function Pathfinding.NavigateBasic(target)
+    Log("Basic", "Starting basic navigation")
+    
+    local root = GetRootPart()
+    if not root then
+        Log("Basic", "No root part found", "ERROR")
+        return false
+    end
+    
+    local targetPos = target
+    if typeof(target) == "Instance" then
+        if target:IsA("Model") then
+            targetPos = target:GetPivot().Position
+        elseif target:IsA("BasePart") then
+            targetPos = target.Position
+        end
+    elseif typeof(target) == "string" then
+        -- Try to find player or part by name
+        local targetPlayer = Players:FindFirstChild(target)
+        if targetPlayer and targetPlayer.Character then
+            targetPos = targetPlayer.Character:GetPivot().Position
+        else
+            local targetPart = workspace:FindFirstChild(target, true)
+            if targetPart and targetPart:IsA("BasePart") then
+                targetPos = targetPart.Position
+            else
+                Log("Basic", "Could not find target: " .. target, "ERROR")
+                return false
+            end
+        end
+    end
+    
+    Pathfinding.State.isNavigating = true
+    Pathfinding.State.currentMode = "basic"
+    Pathfinding.State.targetPosition = targetPos
+    Pathfinding.State.attempts = Pathfinding.State.attempts + 1
+    Pathfinding.State.startTime = tick()
+    
+    -- Create and follow path
+    local path = Pathfinding.CreatePath(root.Position, targetPos)
+    
+    if not path then
+        Log("Basic", "Failed to create path", "ERROR")
+        Pathfinding.State.isNavigating = false
+        return false
+    end
+    
+    local success = Pathfinding.FollowPath(path, "basic")
+    
+    Pathfinding.State.isNavigating = false
+    
+    local timeTaken = tick() - Pathfinding.State.startTime
+    Log("Basic", string.format("Navigation %s in %.1fs", 
+        success and "completed" or "failed", timeTaken))
+    
+    return success
+end
+
+-- ============================================
+-- OBBY MODE (WITH DEATH LEARNING)
+-- ============================================
+
+function Pathfinding.DetectDeath()
+    local hum = GetHumanoid()
+    if not hum then return false end
+    
+    -- Check if health dropped to 0
+    if hum.Health <= 0 then
+        return true
+    end
+    
+    -- Check if fell into void
+    local root = GetRootPart()
+    if root and root.Position.Y < -100 then
+        return true
+    end
+    
+    return false
+end
+
+function Pathfinding.WaitForRespawn()
+    Log("Obby", "Waiting for respawn...")
+    
+    local timeout = 0
+    while timeout < 10 do
+        local char = GetCharacter()
+        local hum = GetHumanoid()
+        local root = GetRootPart()
+        
+        if char and hum and root and hum.Health > 0 then
+            task.wait(Config.deathCooldown)
+            Log("Obby", "Respawned successfully")
+            return true
+        end
+        
+        task.wait(0.5)
+        timeout = timeout + 0.5
+    end
+    
+    Log("Obby", "Respawn timeout", "ERROR")
+    return false
+end
+
+function Pathfinding.NavigateObby(target, maxAttempts)
+    maxAttempts = maxAttempts or Config.obbyMaxAttempts
+    
+    Log("Obby", "Starting obby navigation with learning system")
+    
+    Pathfinding.State.isNavigating = true
+    Pathfinding.State.currentMode = "obby"
+    Pathfinding.State.attempts = 0
+    Pathfinding.State.deaths = 0
+    Pathfinding.State.startTime = tick()
+    
+    local root = GetRootPart()
+    if not root then
+        Log("Obby", "No root part", "ERROR")
+        return false
+    end
+    
+    local targetPos = target
+    if typeof(target) == "Instance" then
+        if target:IsA("Model") then
+            targetPos = target:GetPivot().Position
+        elseif target:IsA("BasePart") then
+            targetPos = target.Position
+        end
+    end
+    
+    Pathfinding.State.targetPosition = targetPos
+    
+    -- Death detection loop
+    local deathConnection
+    local successfullyReached = false
+    
+    local function attemptNavigation()
+        Pathfinding.State.attempts = Pathfinding.State.attempts + 1
+        
+        Log("Obby", string.format("Attempt %d/%d", Pathfinding.State.attempts, maxAttempts))
+        
+        local currentRoot = GetRootPart()
+        if not currentRoot then return false end
+        
+        -- Create path
+        local path = Pathfinding.CreatePath(currentRoot.Position, targetPos)
+        if not path then
+            Log("Obby", "Failed to create path", "ERROR")
+            return false
+        end
+        
+        -- Start death monitoring
+        local lastPosition = currentRoot.Position
+        local died = false
+        
+        deathConnection = RunService.Heartbeat:Connect(function()
+            if Pathfinding.DetectDeath() then
+                died = true
+                Pathfinding.State.deaths = Pathfinding.State.deaths + 1
+                
+                -- Record death location and what we were attempting
+                Pathfinding.RecordDeath(lastPosition, {
+                    waypoint = Pathfinding.State.currentWaypoint,
+                    position = lastPosition,
+                    attempt = Pathfinding.State.attempts
+                })
+                
+                Log("Obby", string.format("Death detected at attempt %d (total: %d)", 
+                    Pathfinding.State.attempts, Pathfinding.State.deaths), "WARN")
+            end
+            
+            -- Update last known position
+            local root = GetRootPart()
+            if root then
+                lastPosition = root.Position
+            end
+        end)
+        
+        -- Follow path
+        local success = Pathfinding.FollowPath(path, "obby")
+        
+        -- Disconnect death monitor
+        if deathConnection then
+            deathConnection:Disconnect()
+        end
+        
+        if died then
+            Log("Obby", "Died during navigation, respawning...")
+            Pathfinding.WaitForRespawn()
+            return false
+        end
+        
+        if success then
+            -- Check if we actually reached target
+            local finalRoot = GetRootPart()
+            if finalRoot then
+                local distanceToTarget = Distance3D(finalRoot.Position, targetPos)
+                if distanceToTarget < 10 then
+                    successfullyReached = true
+                    
+                    -- Learn this successful route
+                    Pathfinding.LearnSuccess(targetPos, {
+                        attempts = Pathfinding.State.attempts,
+                        deaths = Pathfinding.State.deaths,
+                        time = tick() - Pathfinding.State.startTime
+                    }, "obby")
+                    
+                    return true
+                end
+            end
+        end
+        
+        return false
+    end
+    
+    -- Attempt navigation with retries
+    while Pathfinding.State.attempts < maxAttempts and not successfullyReached do
+        if not Pathfinding.State.isNavigating then
+            Log("Obby", "Navigation cancelled by user")
+            break
+        end
+        
+        local attemptSuccess = attemptNavigation()
+        
+        if attemptSuccess then
+            break
+        end
+        
+        -- Wait before retry
+        task.wait(1)
+    end
+    
+    Pathfinding.State.isNavigating = false
+    
+    local timeTaken = tick() - Pathfinding.State.startTime
+    
+    if successfullyReached then
+        Log("Obby", string.format("SUCCESS! Reached target in %d attempts, %d deaths, %.1fs", 
+            Pathfinding.State.attempts, Pathfinding.State.deaths, timeTaken), "SUCCESS")
+    else
+        Log("Obby", string.format("FAILED after %d attempts, %d deaths, %.1fs", 
+            Pathfinding.State.attempts, Pathfinding.State.deaths, timeTaken), "ERROR")
+    end
+    
+    return successfullyReached
+end
+
+-- ============================================
+-- ADVANCED MODE (PARKOUR & PRECISION)
+-- ============================================
+
+function Pathfinding.CalculateJumpVelocity(distance, height)
+    -- Calculate required velocity to jump a certain distance
+    local gravity = 196.2  -- Roblox gravity
+    local jumpPower = Config.advancedJumpPower
+    
+    -- Time in air
+    local timeUp = jumpPower / gravity
+    local timeFall = math.sqrt((2 * height) / gravity)
+    local totalTime = timeUp + timeFall
+    
+    -- Required horizontal velocity
+    local requiredVelocity = distance / totalTime
+    
+    return requiredVelocity, totalTime
+end
+
+function Pathfinding.PrecisionJump(targetPosition, currentPosition)
+    local hum = GetHumanoid()
+    local root = GetRootPart()
+    
+    if not hum or not root then return false end
+    
+    -- Calculate distance and direction
+    local distance = Distance2D(currentPosition, targetPosition)
+    local heightDiff = targetPosition.Y - currentPosition.Y
+    
+    -- Calculate required velocity
+    local requiredVelocity, airTime = Pathfinding.CalculateJumpVelocity(distance, heightDiff)
+    
+    Log("Advanced", string.format("Precision jump: %.1f studs, %.1f height, %.1f vel", 
+        distance, heightDiff, requiredVelocity))
+    
+    -- Orient character
+    local direction = (targetPosition - currentPosition).Unit
+    root.CFrame = CFrame.new(root.Position, root.Position + direction)
+    
+    -- Apply velocity and jump
+    local bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(math.huge, 0, math.huge)
+    bodyVelocity.Velocity = direction * requiredVelocity
+    bodyVelocity.Parent = root
+    
+    task.wait(0.05)
+    hum.Jump = true
+    task.wait(0.1)
+    hum.Jump = false
+    
+    -- Wait for landing
+    task.wait(airTime)
+    
+    bodyVelocity:Destroy()
+    
+    -- Verify landing
+    task.wait(0.2)
+    local finalRoot = GetRootPart()
+    if finalRoot then
+        local landingDistance = Distance3D(finalRoot.Position, targetPosition)
+        return landingDistance < 5
+    end
+    
+    return false
+end
+
+function Pathfinding.NavigateAdvanced(target)
+    Log("Advanced", "Starting advanced parkour navigation")
+    
+    Pathfinding.State.isNavigating = true
+    Pathfinding.State.currentMode = "advanced"
+    Pathfinding.State.startTime = tick()
+    
+    local root = GetRootPart()
+    if not root then
+        Log("Advanced", "No root part", "ERROR")
+        return false
+    end
+    
+    local targetPos = target
+    if typeof(target) == "Instance" then
+        if target:IsA("Model") then
+            targetPos = target:GetPivot().Position
+        elseif target:IsA("BasePart") then
+            targetPos = target.Position
+        end
+    end
+    
+    Pathfinding.State.targetPosition = targetPos
+    
+    -- Try basic path first
+    local path = Pathfinding.CreatePath(root.Position, targetPos)
+    
+    if path then
+        Log("Advanced", "Using pathfinding with advanced techniques")
+        
+        local waypoints = path:GetWaypoints()
+        local hum = GetHumanoid()
+        
+        for i, waypoint in ipairs(waypoints) do
+            if not Pathfinding.State.isNavigating then
+                break
+            end
+            
+            local currentRoot = GetRootPart()
+            if not currentRoot then break end
+            
+            -- Check for gaps ahead
+            local direction = (waypoint.Position - currentRoot.Position).Unit
+            local hasGap, gapStart, gapEnd = DetectGap(currentRoot.Position, direction)
+            
+            if hasGap and Distance3D(currentRoot.Position, gapStart) < 15 then
+                Log("Advanced", "Gap detected, using precision jump")
+                
+                -- Move close to gap edge
+                hum:MoveTo(gapStart - direction * 2)
+                task.wait(1)
+                
+                -- Precision jump across gap
+                local jumpSuccess = Pathfinding.PrecisionJump(waypoint.Position, currentRoot.Position)
+                
+                if not jumpSuccess then
+                    Log("Advanced", "Precision jump failed", "WARN")
+                end
+            else
+                -- Normal movement
+                hum:MoveTo(waypoint.Position)
+                
+                if waypoint.Action == Enum.PathWaypointAction.Jump then
+                    task.wait(0.3)
+                    hum.Jump = true
+                    task.wait(0.1)
+                    hum.Jump = false
+                end
+                
+                -- Wait to reach
+                local timeout = 0
+                while timeout < 5 do
+                    local root2 = GetRootPart()
+                    if root2 and Distance2D(root2.Position, waypoint.Position) < Config.waypointReachedDistance then
+                        break
+                    end
+                    task.wait(0.1)
+                    timeout = timeout + 0.1
+                end
+            end
+        end
+        
+        hum:MoveTo(root.Position)
+    else
+        Log("Advanced", "Path creation failed, attempting direct navigation", "WARN")
+        
+        -- Try direct approach with precision jumps
+        local hum = GetHumanoid()
+        hum:MoveTo(targetPos)
+        
+        task.wait(2)
+        
+        local finalRoot = GetRootPart()
+        if finalRoot and Distance3D(finalRoot.Position, targetPos) > 10 then
+            Log("Advanced", "Attempting precision jump to target")
+            Pathfinding.PrecisionJump(targetPos, finalRoot.Position)
+        end
+    end
+    
+    Pathfinding.State.isNavigating = false
+    
+    -- Check success
+    local finalRoot = GetRootPart()
+    local success = false
+    if finalRoot then
+        local distance = Distance3D(finalRoot.Position, targetPos)
+        success = distance < 10
+    end
+    
+    local timeTaken = tick() - Pathfinding.State.startTime
+    Log("Advanced", string.format("Navigation %s in %.1fs", 
+        success and "completed" or "failed", timeTaken))
+    
+    return success
+end
+
+-- ============================================
+-- SMART AUTO-DETECTION
+-- ============================================
+
+function Pathfinding.AnalyzeRoute(startPos, endPos)
+    -- Analyze the route and recommend best mode
+    local analysis = {
+        distance = Distance3D(startPos, endPos),
+        heightDiff = math.abs(endPos.Y - startPos.Y),
+        hasObstacles = false,
+        hasGaps = false,
+        hasMovingParts = false,
+        hasKillbricks = false,
+        recommendedMode = "basic"
+    }
+    
+    -- Check path area for obstacles
+    local direction = (endPos - startPos).Unit
+    local checkDistance = math.min(analysis.distance, 100)
+    
+    for i = 0, checkDistance, 10 do
+        local checkPos = startPos + direction * i
+        
+        -- Check for parts at this position
+        local region = Region3.new(checkPos - Vector3.new(10, 10, 10), checkPos + Vector3.new(10, 10, 10))
+        region = region:ExpandToGrid(4)
+        
+        for _, part in ipairs(workspace:FindPartsInRegion3(region, nil, 100)) do
+            if IsKillbrick(part) then
+                analysis.hasKillbricks = true
+            end
+            if IsMovingPart(part) then
+                analysis.hasMovingParts = true
+            end
+        end
+        
+        -- Check for gaps
+        local hasGap = DetectGap(checkPos, direction, 15)
+        if hasGap then
+            analysis.hasGaps = true
+        end
+    end
+    
+    -- Determine recommended mode
+    if analysis.hasKillbricks or analysis.distance > 100 then
+        analysis.recommendedMode = "obby"
+    end
+    
+    if analysis.hasGaps or analysis.hasMovingParts or analysis.heightDiff > 20 then
+        analysis.recommendedMode = "advanced"
+    end
+    
+    Log("Analysis", string.format("Route: %.1f studs, %.1f height, Mode: %s", 
+        analysis.distance, analysis.heightDiff, analysis.recommendedMode))
+    
+    return analysis
+end
+
+-- ============================================
+-- UNIFIED NAVIGATION INTERFACE
+-- ============================================
+
+function Pathfinding.Navigate(target, mode)
+    -- Unified navigation function
+    -- mode can be: "basic", "obby", "advanced", or "auto"
+    
+    mode = mode or "auto"
+    
+    local root = GetRootPart()
+    if not root then
+        Log("Navigate", "No root part found", "ERROR")
+        return false
+    end
+    
+    -- Convert target to position
+    local targetPos = target
+    if typeof(target) == "Instance" then
+        if target:IsA("Model") then
+            targetPos = target:GetPivot().Position
+        elseif target:IsA("BasePart") then
+            targetPos = target.Position
+        end
+    elseif typeof(target) == "string" then
+        -- Try to find by name
+        local targetPlayer = Players:FindFirstChild(target)
+        if targetPlayer and targetPlayer.Character then
+            targetPos = targetPlayer.Character:GetPivot().Position
+        else
+            local targetPart = workspace:FindFirstChild(target, true)
+            if targetPart and targetPart:IsA("BasePart") then
+                targetPos = targetPart.Position
+            else
+                Log("Navigate", "Could not find target: " .. target, "ERROR")
+                return false
+            end
+        end
+    end
+    
+    -- Auto-detect mode if needed
+    if mode == "auto" then
+        local analysis = Pathfinding.AnalyzeRoute(root.Position, targetPos)
+        mode = analysis.recommendedMode
+        Log("Navigate", "Auto-selected mode: " .. mode)
+    end
+    
+    -- Execute navigation
+    if mode == "basic" then
+        return Pathfinding.NavigateBasic(targetPos)
+    elseif mode == "obby" then
+        return Pathfinding.NavigateObby(targetPos)
+    elseif mode == "advanced" then
+        return Pathfinding.NavigateAdvanced(targetPos)
+    else
+        Log("Navigate", "Unknown mode: " .. mode, "ERROR")
+        return false
+    end
+end
+
+-- ============================================
+-- CONTROL FUNCTIONS
+-- ============================================
+
+function Pathfinding.Stop()
+    Log("Control", "Stopping navigation")
+    Pathfinding.State.isNavigating = false
+    
+    local hum = GetHumanoid()
+    if hum then
+        local root = GetRootPart()
+        if root then
+            hum:MoveTo(root.Position)
+        end
+    end
+end
+
+function Pathfinding.Pause()
+    Log("Control", "Pausing navigation")
+    Pathfinding.State.isPaused = true
+end
+
+function Pathfinding.Resume()
+    Log("Control", "Resuming navigation")
+    Pathfinding.State.isPaused = false
+end
+
+function Pathfinding.GetStatus()
+    return {
+        isNavigating = Pathfinding.State.isNavigating,
+        isPaused = Pathfinding.State.isPaused,
+        currentMode = Pathfinding.State.currentMode,
+        attempts = Pathfinding.State.attempts,
+        deaths = Pathfinding.State.deaths,
+        targetPosition = Pathfinding.State.targetPosition,
+        currentWaypoint = Pathfinding.State.currentWaypoint,
+        learningDatabase = Pathfinding.State.learningDatabase,
+        dangerZones = Pathfinding.State.dangerZones
+    }
+end
+
+function Pathfinding.ClearLearning()
+    Log("Control", "Clearing learning database")
+    Pathfinding.State.learningDatabase = {}
+    Pathfinding.State.deathHistory = {}
+    Pathfinding.State.dangerZones = {}
+end
+
+-- ============================================
+-- INITIALIZATION
+-- ============================================
+
+print("========================================")
+print("SS Hub Pathfinding Module v" .. Pathfinding.Version)
+print("Modes: Basic, Obby (Learning), Advanced")
+print("Status: Ready")
+print("========================================")
+
+return Pathfinding
