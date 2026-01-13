@@ -1,0 +1,3877 @@
+-- AI Chatbot Hub for Roblox
+-- Powered by OpenRouter API
+-- UI Library: Rayfield Interface Suite
+
+-- Services
+local HttpService = game:GetService("HttpService")
+local TextChatService = game:GetService("TextChatService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Enable HttpService (for exploits/executors)
+pcall(function()
+   HttpService.HttpEnabled = true
+end)
+
+-- Custom HTTP Request Function for Executors
+local function customHttpRequest(url, method, headers, body)
+   -- Try different executor HTTP methods
+   local request = syn and syn.request or http and http.request or http_request or request
+   
+   if request then
+      -- Use executor's custom request function
+      local response = request({
+         Url = url,
+         Method = method or "GET",
+         Headers = headers or {},
+         Body = body
+      })
+      return response.Success, response.Body or response.StatusCode
+   else
+      -- Fallback to normal HttpService
+      if method == "POST" then
+         return pcall(function()
+            return HttpService:PostAsync(url, body, Enum.HttpContentType.ApplicationJson, false, headers)
+         end)
+      else
+         return pcall(function()
+            return HttpService:GetAsync(url)
+         end)
+      end
+   end
+end
+
+-- Local Player
+local LocalPlayer = Players.LocalPlayer
+
+-- Load Rayfield UI Library
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- Create Main Window
+local Window = Rayfield:CreateWindow({
+   Name = "SS Hub - AI Chatbot",
+   LoadingTitle = "SS Hub AI Loading",
+   LoadingSubtitle = "Powered by OpenRouter API",
+   ConfigurationSaving = {
+      Enabled = false
+   },
+   Discord = {
+      Enabled = false
+   },
+   KeySystem = false
+})
+
+-- Configuration Variables
+local Config = {
+   ApiKey = "",
+   Model = "mistralai/devstral-2512:free",
+   ChatbotName = "AI Assistant",
+   ChatbotEnabled = false,
+   ResponseDistance = 20,
+   CurrentPrompt = "You are a helpful assistant named {name}. Respond naturally but avoid any words that might be filtered in games by using alternative phrasing if needed.",
+   MaxChatLength = 200,  -- Roblox chat character limit
+   ActionsEnabled = false,  -- Actions module toggle
+   PathfindingEnabled = false,  -- Pathfinding module toggle
+   
+   -- Auto-Greet with Pathfinding
+   EnableAutoGreet = false,     -- Auto approach idle players
+   AutoGreetInterval = 30,      -- Seconds of inactivity before greeting
+   AutoGreetMaxDistance = 100,  -- Max distance to consider players
+   
+   -- Message Formatting
+   EnableMultiMessage = false,  -- Split long messages into parts
+   EnableAIPrefix = false,      -- Add [AI] prefix to messages
+   
+   -- Anti-Spam Settings
+   UserCooldown = 2,        -- Seconds between messages per user
+   GlobalCooldown = 0.5,    -- Seconds between ANY messages (global)
+   MaxQueueSize = 5,        -- Max queued requests before blocking
+   SpamThreshold = 5,       -- Messages in window to trigger spam block
+   SpamWindow = 10          -- Time window (seconds) for spam detection
+}
+
+-- Anti-Spam State
+local AntiSpam = {
+   userLastMessage = {},       -- [username] = timestamp
+   globalLastMessage = 0,      -- Last message timestamp
+   messageQueue = {},          -- Queue of pending messages
+   isProcessing = false,       -- Is queue being processed
+   spamLog = {},              -- Recent message timestamps for spam detection
+   blockedUsers = {}          -- [username] = unblock_timestamp
+}
+
+-- Auto-Greet State
+local AutoGreet = {
+   lastActivity = tick(),      -- Last time bot received a message
+   greetedPlayers = {}        -- [username] = timestamp (prevent re-greeting)
+}
+
+-- Module URLs
+local ModuleURLs = {
+   Actions = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/main/actions-basic.lua",
+   Pathfinding = "https://raw.githubusercontent.com/Essencor/pathfinding-module/refs/heads/main/pathfinding-complete.lua"
+}
+
+-- Loaded Modules Storage
+local LoadedModules = {}
+
+-- ========================================
+-- MODULE LOADER SYSTEM
+-- ========================================
+
+local function LoadModule(moduleName)
+   if not ModuleURLs[moduleName] then
+      warn("LoadModule - Unknown module:", moduleName)
+      return nil
+   end
+   
+   print("========== LOADING MODULE ==========")
+   print("Module:", moduleName)
+   print("URL:", ModuleURLs[moduleName])
+   
+   local url = ModuleURLs[moduleName]
+   local success, response = customHttpRequest(url, "GET", {}, nil)
+   
+   if not success then
+      warn("LoadModule - HTTP failed:", tostring(response))
+      print("====================================")
+      return nil
+   end
+   
+   if type(response) ~= "string" or #response < 100 then
+      warn("LoadModule - Invalid response (too short or wrong type)")
+      print("====================================")
+      return nil
+   end
+   
+   print("Response received:", #response, "characters")
+   
+   local loadSuccess, module = pcall(loadstring(response))
+   
+   if not loadSuccess then
+      warn("LoadModule - Loadstring failed:", tostring(module))
+      print("====================================")
+      return nil
+   end
+   
+   if type(module) ~= "table" then
+      warn("LoadModule - Module didn't return a table")
+      print("====================================")
+      return nil
+   end
+   
+   print("Module loaded successfully!")
+   print("Module version:", module.Version or "Unknown")
+   print("====================================")
+   
+   return module
+end
+
+local function GetModule(moduleName)
+   -- Return cached module if available
+   if LoadedModules[moduleName] then
+      return LoadedModules[moduleName]
+   end
+   
+   -- Check if module is enabled
+   if not Config[moduleName .. "Enabled"] then
+      return nil
+   end
+   
+   -- Load and cache
+   local module = LoadModule(moduleName)
+   if module then
+      LoadedModules[moduleName] = module
+   end
+   
+   return module
+end
+
+local function UnloadModule(moduleName)
+   if LoadedModules[moduleName] then
+      LoadedModules[moduleName] = nil
+      collectgarbage("collect")
+      print("UnloadModule - Unloaded:", moduleName)
+      return true
+   end
+   return false
+end
+
+-- ========================================
+-- ANTI-SPAM SYSTEM
+-- ========================================
+
+-- Check if user is currently blocked
+local function IsUserBlocked(username)
+   local blockUntil = AntiSpam.blockedUsers[username]
+   if blockUntil and tick() < blockUntil then
+      return true, blockUntil - tick()
+   end
+   AntiSpam.blockedUsers[username] = nil
+   return false
+end
+
+-- Block a user temporarily
+local function BlockUser(username, duration)
+   AntiSpam.blockedUsers[username] = tick() + duration
+   print(string.format("🚫 Blocked %s for %.1fs (spam protection)", username, duration))
+end
+
+-- Check if message should be rate limited
+local function CheckRateLimit(username)
+   local now = tick()
+   
+   -- Check if user is blocked
+   local blocked, timeLeft = IsUserBlocked(username)
+   if blocked then
+      return false, string.format("You're sending too fast! Wait %.1fs", timeLeft)
+   end
+   
+   -- Check user cooldown
+   local lastMsg = AntiSpam.userLastMessage[username] or 0
+   local timeSince = now - lastMsg
+   
+   if timeSince < Config.UserCooldown then
+      local waitTime = Config.UserCooldown - timeSince
+      return false, string.format("Slow down! Wait %.1fs", waitTime)
+   end
+   
+   -- Check global cooldown
+   local globalTimeSince = now - AntiSpam.globalLastMessage
+   if globalTimeSince < Config.GlobalCooldown then
+      return false, "Server busy, try again in a moment"
+   end
+   
+   -- Check queue size
+   if #AntiSpam.messageQueue >= Config.MaxQueueSize then
+      return false, "Too many requests! Try again later"
+   end
+   
+   -- Check for spam pattern (multiple messages in short time)
+   table.insert(AntiSpam.spamLog, {username = username, time = now})
+   
+   -- Clean old entries from spam log
+   local cutoff = now - Config.SpamWindow
+   local recentMessages = {}
+   for i = #AntiSpam.spamLog, 1, -1 do
+      if AntiSpam.spamLog[i].time >= cutoff then
+         table.insert(recentMessages, 1, AntiSpam.spamLog[i])
+      end
+   end
+   AntiSpam.spamLog = recentMessages
+   
+   -- Count messages from this user in window
+   local userMsgCount = 0
+   for _, entry in ipairs(AntiSpam.spamLog) do
+      if entry.username == username then
+         userMsgCount = userMsgCount + 1
+      end
+   end
+   
+   -- If spam detected, block user
+   if userMsgCount >= Config.SpamThreshold then
+      BlockUser(username, 30) -- 30 second block
+      return false, "⚠️ SPAM DETECTED! Blocked for 30 seconds"
+   end
+   
+   -- Update timestamps
+   AntiSpam.userLastMessage[username] = now
+   AntiSpam.globalLastMessage = now
+   
+   return true
+end
+
+-- Get anti-spam status
+local function GetAntiSpamStatus()
+   local now = tick()
+   local blockedCount = 0
+   local blockedList = {}
+   
+   for username, unblockTime in pairs(AntiSpam.blockedUsers) do
+      if now < unblockTime then
+         blockedCount = blockedCount + 1
+         table.insert(blockedList, string.format("%s (%.1fs)", username, unblockTime - now))
+      end
+   end
+   
+   return {
+      queueSize = #AntiSpam.messageQueue,
+      isProcessing = AntiSpam.isProcessing,
+      blockedUsers = blockedCount,
+      blockedList = blockedList,
+      recentMessages = #AntiSpam.spamLog
+   }
+end
+
+-- ========================================
+
+-- ========================================
+-- Model-Specific API Keys
+local ModelApiKeys = {
+   ["mistralai/devstral-2512:free"] = "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",
+   ["xiaomi/mimo-v2-flash:free"] = "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",
+   ["tngtech/deepseek-r1t2-chimera:free"] = "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"
+}
+
+-- Preloaded Personality Prompts
+local Personalities = {
+   Default = "You are a helpful assistant named {name}. Respond naturally but avoid any words that might be filtered in games by using alternative phrasing if needed.",
+   Nerd = "You are a super smart nerd named {name} who loves science, math, and facts. Respond in a geeky, enthusiastic way with lots of trivia. Avoid game filters by using creative language.",
+   Waifu = "You are a cute anime waifu named {name}, very affectionate and kawaii. Use ~, hearts ♥, and emojis. Be flirty and sweet. Avoid filters with alternative spellings if needed.",
+   Furry = "You are a friendly furry fox named {name}, playful and energetic. Use paw emotes *wags tail*, animal sounds like 'arf!', and be fun. Keep responses filter-safe.",
+   Robot = "You are a robotic AI named {name}, respond in a mechanical, logical manner. Use binary like 0101 or code references. Structure replies precisely. Avoid filtered words."
+}
+
+-- Available Free Models
+local AvailableModels = {
+   "mistralai/devstral-2512:free",
+   "xiaomi/mimo-v2-flash:free",
+   "tngtech/deepseek-r1t2-chimera:free"
+}
+
+-- Custom Prompts Storage
+local CustomPrompts = {}
+
+-- Debug Response Storage
+local LastDebugResponse = "No response yet"
+
+-- ========================================
+-- MEMORY SYSTEM
+-- ========================================
+
+local Memory = {
+   -- Individual user conversations (isolated per user)
+   UserMemories = {},
+   
+   -- Global memory pool (all conversations combined)
+   GlobalMemory = {},
+   
+   -- Settings
+   MaxUserMessages = 10,      -- Keep last 10 messages per user
+   MaxGlobalMessages = 50,    -- Keep last 50 messages total
+   
+   -- Add message to specific user's memory
+   AddUserMessage = function(self, username, message, isAI)
+      -- Initialize user memory if doesn't exist
+      if not self.UserMemories[username] then
+         self.UserMemories[username] = {}
+      end
+      
+      local entry = {
+         username = username,
+         message = message,
+         isAI = isAI or false,
+         timestamp = tick()
+      }
+      
+      -- Add to user's personal memory
+      table.insert(self.UserMemories[username], entry)
+      
+      -- Add to global memory
+      table.insert(self.GlobalMemory, entry)
+      
+      -- Trim user memory if too long
+      if #self.UserMemories[username] > self.MaxUserMessages then
+         table.remove(self.UserMemories[username], 1)
+      end
+      
+      -- Trim global memory if too long
+      if #self.GlobalMemory > self.MaxGlobalMessages then
+         table.remove(self.GlobalMemory, 1)
+      end
+   end,
+   
+   -- Get conversation history for specific user
+   GetUserHistory = function(self, username, count)
+      count = count or 5
+      
+      if not self.UserMemories[username] then
+         return ""
+      end
+      
+      local history = ""
+      local messages = self.UserMemories[username]
+      local startIdx = math.max(1, #messages - count + 1)
+      
+      for i = startIdx, #messages do
+         local entry = messages[i]
+         if entry.isAI then
+            history = history .. "AI: " .. entry.message .. "\n"
+         else
+            history = history .. entry.username .. ": " .. entry.message .. "\n"
+         end
+      end
+      
+      return history
+   end,
+   
+   -- Search global memory for context
+   SearchGlobalMemory = function(self, query, maxResults)
+      maxResults = maxResults or 5
+      local results = {}
+      local queryLower = query:lower()
+      
+      -- Search backwards (most recent first)
+      for i = #self.GlobalMemory, 1, -1 do
+         local entry = self.GlobalMemory[i]
+         
+         if entry.message:lower():match(queryLower) then
+            table.insert(results, entry)
+            
+            if #results >= maxResults then
+               break
+            end
+         end
+      end
+      
+      return results
+   end,
+   
+   -- Get formatted global context
+   GetGlobalContext = function(self, query)
+      if not query then
+         -- Return recent global activity
+         local context = "Recent activity:\n"
+         local count = math.min(5, #self.GlobalMemory)
+         
+         for i = #self.GlobalMemory - count + 1, #self.GlobalMemory do
+            if i > 0 then
+               local entry = self.GlobalMemory[i]
+               context = context .. string.format("%s: %s\n", 
+                  entry.isAI and "AI" or entry.username, 
+                  entry.message:sub(1, 50))
+            end
+         end
+         
+         return context
+      else
+         -- Search for specific context
+         local results = self:SearchGlobalMemory(query, 3)
+         
+         if #results == 0 then
+            return "No relevant information found in memory."
+         end
+         
+         local context = "Found in memory:\n"
+         for _, entry in ipairs(results) do
+            context = context .. string.format("%s: %s\n",
+               entry.isAI and "AI" or entry.username,
+               entry.message:sub(1, 60))
+         end
+         
+         return context
+      end
+   end,
+   
+   -- Clear specific user's memory
+   ClearUserMemory = function(self, username)
+      if self.UserMemories[username] then
+         self.UserMemories[username] = {}
+         print("Cleared memory for:", username)
+         return true
+      end
+      return false
+   end,
+   
+   -- Clear all memory
+   ClearAllMemory = function(self)
+      self.UserMemories = {}
+      self.GlobalMemory = {}
+      print("All memory cleared")
+   end,
+   
+   -- Get memory stats
+   GetStats = function(self)
+      local userCount = 0
+      local totalUserMessages = 0
+      
+      for username, messages in pairs(self.UserMemories) do
+         userCount = userCount + 1
+         totalUserMessages = totalUserMessages + #messages
+      end
+      
+      return {
+         uniqueUsers = userCount,
+         totalUserMessages = totalUserMessages,
+         globalMessages = #self.GlobalMemory
+      }
+   end
+}
+
+-- AI Response Function
+local function GetAIResponse(userMessage, username, displayName)
+   -- Use model-specific API key if available, otherwise use custom key
+   local apiKeyToUse = ModelApiKeys[Config.Model] or Config.ApiKey
+   
+   -- Use display name if provided, otherwise username
+   local nameToUse = displayName or username or "User"
+   
+   print("GetAIResponse - Model:", Config.Model)
+   print("GetAIResponse - User:", nameToUse, username and string.format("(@%s)", username) or "")
+   print("GetAIResponse - API Key (first 20 chars):", apiKeyToUse:sub(1, 20))
+   
+   if apiKeyToUse == "" or apiKeyToUse == nil then
+      Rayfield:Notify({
+         Title = "Error",
+         Content = "API Key not configured!",
+         Duration = 4,
+         Image = 4483362458
+      })
+      return nil
+   end
+   
+   -- Replace {name} placeholder in prompt with chatbot name
+   local finalPrompt = Config.CurrentPrompt:gsub("{name}", Config.ChatbotName)
+   
+   -- Add character limit instruction (varies by mode)
+   if Config.EnableMultiMessage then
+      finalPrompt = finalPrompt .. "\n\nYou can write responses of ANY length. Long responses will be automatically split into multiple messages. Be natural and complete your thoughts."
+   else
+      finalPrompt = finalPrompt .. "\n\nIMPORTANT: Keep ALL responses under 180 characters. Be concise and brief."
+   end
+   
+   -- Add actions capability if module is loaded
+   if Config.ActionsEnabled and LoadedModules.Actions then
+      finalPrompt = finalPrompt .. [[
+
+ACTIONS AVAILABLE: You can perform physical actions with QUANTITIES!
+Available: jump, sit, stand, dance, wave, point, cheer, laugh, follow, stop.
+Examples:
+- "jump 20 times" → jumps 20 times
+- "sit then jump 5 times" → sits, then jumps 5 times  
+- "dance and wave 10x" → dances once, waves 10 times
+Just respond naturally - actions happen automatically. Say "Okay, jumping 20 times!" and you WILL jump 20 times.]]
+   end
+   
+   -- Add pathfinding capability if module is loaded
+   if Config.PathfindingEnabled and LoadedModules.Pathfinding then
+      finalPrompt = finalPrompt .. [[
+
+NAVIGATION AVAILABLE: You can navigate anywhere in the game!
+When users ask you to go somewhere or follow them, YOU WILL automatically pathfind there.
+Examples:
+- "follow me" → you walk to the user
+- "go to spawn" → you navigate to spawn
+- "walk to PlayerName" → you walk to that player
+- "beat the obby" → you complete the obstacle course with AI learning
+Just respond naturally - navigation happens automatically. Say "Following you!" and you WILL walk to them.]]
+   end
+   
+   -- Add memory context if user is specified
+   if username then
+      local userHistory = Memory:GetUserHistory(username, 5)
+      
+      if userHistory ~= "" then
+         -- Use display name in prompt if available
+         local contextName = displayName or username
+         finalPrompt = finalPrompt .. "\n\nConversation history with " .. contextName .. ":\n" .. userHistory
+      end
+      
+      -- Add note about display name if different from username
+      if displayName and displayName ~= username then
+         finalPrompt = finalPrompt .. string.format("\n\nNote: This user's display name is '%s' but their username is '@%s'. Use their display name when addressing them.", displayName, username)
+      end
+   end
+   
+   local apiUrl = "https://openrouter.ai/api/v1/chat/completions"
+   local headers = {
+      ["Authorization"] = "Bearer " .. apiKeyToUse,
+      ["Content-Type"] = "application/json"
+   }
+   
+   local requestBody = {
+      model = Config.Model,
+      messages = {
+         {role = "system", content = finalPrompt},
+         {role = "user", content = userMessage}
+      },
+      temperature = 0.7,
+      max_tokens = 80  -- Reduced to ensure shorter responses
+   }
+   
+   local jsonBody = HttpService:JSONEncode(requestBody)
+   
+   print("GetAIResponse - Sending request...")
+   
+   -- Use custom HTTP function that works with executors
+   local success, response = customHttpRequest(apiUrl, "POST", headers, jsonBody)
+   
+   print("GetAIResponse - Success:", success)
+   print("GetAIResponse - Response type:", type(response))
+   
+   if success then
+      local decodeSuccess, decodedData = pcall(function()
+         return HttpService:JSONDecode(response)
+      end)
+      
+      print("GetAIResponse - Decode Success:", decodeSuccess)
+      
+      if decodeSuccess and decodedData and decodedData.choices and decodedData.choices[1] then
+         return decodedData.choices[1].message.content
+      else
+         if decodeSuccess then
+            print("GetAIResponse - Decoded Data:", HttpService:JSONEncode(decodedData or {}))
+         end
+         Rayfield:Notify({
+            Title = "API Error",
+            Content = "Invalid response format",
+            Duration = 5,
+            Image = 4483362458
+         })
+         return nil
+      end
+   else
+      local errorMessage = tostring(response)
+      print("GetAIResponse - Error Message:", errorMessage)
+      
+      if errorMessage:find("429") then
+         Rayfield:Notify({
+            Title = "Rate Limited",
+            Content = "Too many requests. Please wait.",
+            Duration = 5,
+            Image = 4483362458
+         })
+      elseif errorMessage:find("401") or errorMessage:find("403") then
+         Rayfield:Notify({
+            Title = "Authentication Failed",
+            Content = "Invalid API key",
+            Duration = 5,
+            Image = 4483362458
+         })
+      elseif errorMessage:find("HTTP") or errorMessage:find("server") then
+         Rayfield:Notify({
+            Title = "Network Error",
+            Content = "Check your executor's HTTP support",
+            Duration = 5,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Request Failed",
+            Content = errorMessage:sub(1, 50),
+            Duration = 5,
+            Image = 4483362458
+         })
+      end
+      
+      return nil
+   end
+end
+
+-- Truncate message to fit Roblox chat limit
+-- Format message with prefix and/or splitting
+local function FormatMessage(message)
+   local maxLength = Config.MaxChatLength
+   
+   -- Add AI prefix if enabled
+   local prefix = Config.EnableAIPrefix and "[AI] " or ""
+   local prefixLength = #prefix
+   
+   print("========== FORMAT MESSAGE ==========")
+   print("Original length:", #message)
+   print("EnableAIPrefix:", Config.EnableAIPrefix)
+   print("Prefix:", "'" .. prefix .. "'")
+   print("EnableMultiMessage:", Config.EnableMultiMessage)
+   
+   -- Adjust max length if prefix is used
+   local effectiveMaxLength = maxLength - prefixLength
+   
+   -- If message fits in one part
+   if #message <= effectiveMaxLength then
+      print("Single part (fits):", prefix .. message)
+      print("====================================")
+      return {prefix .. message}
+   end
+   
+   -- Multi-message mode: Split into parts
+   if Config.EnableMultiMessage then
+      local parts = {}
+      local remaining = message
+      local partNum = 1
+      
+      -- Calculate total parts needed
+      local totalParts = math.ceil(#message / effectiveMaxLength)
+      
+      -- Reserve space for " (X/Y)" suffix
+      local suffixLength = #string.format(" (%d/%d)", totalParts, totalParts)
+      local partMaxLength = effectiveMaxLength - suffixLength
+      
+      print("Multi-message mode - will create", totalParts, "parts")
+      
+      while #remaining > 0 do
+         local chunk
+         
+         if #remaining <= partMaxLength then
+            -- Last part
+            chunk = remaining
+            remaining = ""
+         else
+            -- Try to split at a space to avoid cutting words
+            local cutPoint = partMaxLength
+            local spacePos = remaining:sub(1, cutPoint):match("^.*()%s")
+            
+            if spacePos and spacePos > partMaxLength * 0.7 then
+               cutPoint = spacePos - 1
+            end
+            
+            chunk = remaining:sub(1, cutPoint)
+            remaining = remaining:sub(cutPoint + 1)
+            
+            -- Trim leading spaces from remaining
+            remaining = remaining:match("^%s*(.*)") or remaining
+         end
+         
+         -- Add part with prefix and suffix
+         local suffix = string.format(" (%d/%d)", partNum, totalParts)
+         local finalPart = prefix .. chunk .. suffix
+         table.insert(parts, finalPart)
+         
+         print(string.format("Part %d: %s", partNum, finalPart))
+         
+         partNum = partNum + 1
+      end
+      
+      print(string.format("Split into %d parts", #parts))
+      print("====================================")
+      return parts
+   else
+      -- Single message mode: Truncate with ellipsis
+      local truncated = message:sub(1, effectiveMaxLength - 3) .. "..."
+      print("Truncated:", prefix .. truncated)
+      print("====================================")
+      return {prefix .. truncated}
+   end
+end
+
+-- Send Chat Message(s) Function
+local function SendChatMessage(message)
+   -- Format message (may split into multiple parts)
+   local messageParts = FormatMessage(message)
+   
+   -- Send each part
+   for i, part in ipairs(messageParts) do
+      local success = false
+      
+      -- Try Method 1: New TextChatService (modern games)
+      pcall(function()
+         local textChannels = TextChatService:WaitForChild("TextChannels", 2)
+         if textChannels then
+            local generalChannel = textChannels:FindFirstChild("RBXGeneral") 
+            if generalChannel and generalChannel:IsA("TextChannel") then
+               generalChannel:SendAsync(part)
+               success = true
+               print("Sent via TextChatService:", part)
+            end
+         end
+      end)
+      
+      if not success then
+         -- Try Method 2: Legacy Chat System (older games)
+         pcall(function()
+            local chat = game:GetService("Chat")
+            if LocalPlayer.Character then
+               chat:Chat(LocalPlayer.Character.Head, part, Enum.ChatColor.White)
+               success = true
+               print("Sent via Legacy Chat:", part)
+            end
+         end)
+      end
+      
+      if not success then
+         -- Try Method 3: Direct Players:Chat() (fallback)
+         pcall(function()
+            game:GetService("Players"):Chat(part)
+            success = true
+            print("Sent via Players:Chat:", part)
+         end)
+      end
+      
+      -- Delay between parts if multiple
+      if i < #messageParts then
+         task.wait(0.5) -- Half second between message parts
+      end
+   end
+end
+
+-- ========================================
+-- AUTO-GREET WITH PATHFINDING
+-- ========================================
+
+-- Get player's display name (or username if no display name)
+local function GetPlayerDisplayName(player)
+   if not player then return "Someone" end
+   
+   -- Try to get display name (Roblox feature)
+   local displayName = player.DisplayName
+   
+   -- If display name exists and is different from username, use it
+   if displayName and displayName ~= "" and displayName ~= player.Name then
+      return displayName
+   end
+   
+   -- Otherwise use username
+   return player.Name
+end
+
+-- Check if player can chat with us (same age group)
+local function CanChatWithPlayer(player)
+   if not player then return false end
+   
+   -- Try to check if we can send them messages
+   local success, canChat = pcall(function()
+      return TextChatService:CanUserChatAsync(LocalPlayer.UserId, player.UserId)
+   end)
+   
+   if not success then
+      -- Fallback: assume we can chat (older games without this API)
+      return true
+   end
+   
+   return canChat
+end
+
+local function FindNearestPlayer()
+   if not LocalPlayer.Character then return nil end
+   
+   local myRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+   if not myRoot then return nil end
+   
+   local nearestPlayer = nil
+   local nearestDistance = Config.AutoGreetMaxDistance
+   local now = tick()
+   
+   for _, player in ipairs(Players:GetPlayers()) do
+      if player ~= LocalPlayer and player.Character then
+         local theirRoot = player.Character:FindFirstChild("HumanoidRootPart")
+         
+         if theirRoot then
+            local distance = (myRoot.Position - theirRoot.Position).Magnitude
+            
+            -- Check if not recently greeted (5 min cooldown)
+            local lastGreeted = AutoGreet.greetedPlayers[player.Name] or 0
+            local timeSinceGreet = now - lastGreeted
+            
+            -- Check if we can chat with them (same age group)
+            if distance < nearestDistance and timeSinceGreet > 300 and CanChatWithPlayer(player) then
+               nearestDistance = distance
+               nearestPlayer = player
+            end
+         end
+      end
+   end
+   
+   return nearestPlayer, nearestDistance
+end
+
+local function GenerateGreeting(player)
+   local displayName = GetPlayerDisplayName(player)
+   
+   local greetingPrompt = string.format(
+      "You see a player named %s nearby. Generate a short, friendly greeting. Be casual and natural. Maximum 80 characters.",
+      displayName
+   )
+   
+   -- Use username for memory lookup, but display name in prompt
+   local greeting = GetAIResponse(greetingPrompt, player.Name)
+   
+   if not greeting or greeting == "" then
+      local fallbacks = {
+         "Hi " .. displayName .. "!",
+         "Hey " .. displayName .. "!",
+         "Hello " .. displayName .. "!",
+         displayName .. "! What's up?"
+      }
+      greeting = fallbacks[math.random(1, #fallbacks)]
+   end
+   
+   return greeting
+end
+
+local function AutoGreetLoop()
+   print("[AutoGreet] Loop started with pathfinding")
+   
+   while true do
+      task.wait(10)
+      
+      print("[AutoGreet] Tick - Checking conditions...")
+      print("  EnableAutoGreet:", Config.EnableAutoGreet)
+      print("  ChatbotEnabled:", Config.ChatbotEnabled)
+      
+      if not Config.EnableAutoGreet or not Config.ChatbotEnabled then
+         continue
+      end
+      
+      local now = tick()
+      local timeSinceActivity = now - AutoGreet.lastActivity
+      
+      print(string.format("  Idle time: %.1fs / %ds required", timeSinceActivity, Config.AutoGreetInterval))
+      
+      if timeSinceActivity >= Config.AutoGreetInterval then
+         print("  Idle threshold reached! Searching for players...")
+         
+         local playerToGreet, distance = FindNearestPlayer()
+         
+         if playerToGreet then
+            local displayName = GetPlayerDisplayName(playerToGreet)
+            
+            print("========== AUTO-GREET ==========")
+            print("Found:", displayName, string.format("(@%s, %.1f studs)", playerToGreet.Name, distance))
+            
+            -- Generate greeting FIRST
+            print("Generating greeting...")
+            local greeting = GenerateGreeting(playerToGreet)
+            print("Greeting generated:", greeting)
+            
+            -- Walk to player using pathfinding
+            if Config.PathfindingEnabled and LoadedModules.Pathfinding then
+               print("Starting navigation...")
+               spawn(function()
+                  LoadedModules.Pathfinding.Navigate(playerToGreet.Name, "basic")
+                  task.wait(2)
+                  print("Sending greeting:", greeting)
+                  SendChatMessage(greeting)
+               end)
+            else
+               print("Sending greeting (no pathfinding):", greeting)
+               SendChatMessage(greeting)
+            end
+            
+            -- Mark as greeted
+            AutoGreet.greetedPlayers[playerToGreet.Name] = now
+            AutoGreet.lastActivity = now
+            
+            print("================================")
+         else
+            print("  No suitable players found")
+         end
+      end
+   end
+end
+
+spawn(AutoGreetLoop)
+
+-- ========================================
+-- PATHFINDING COMMAND SYSTEM (Meta-AI)
+-- ========================================
+
+-- Detect pathfinding requests
+local function DetectPathfindingRequest(message)
+   local msg = message:lower()
+   local patterns = {
+      navigate = {"go to", "navigate to", "walk to", "move to", "head to", "travel to"},
+      obby = {"beat the obby", "complete the obby", "do the obby", "obby", "parkour"},
+      advanced = {"jump to", "get to that", "reach that", "climb to"}
+   }
+   
+   for category, keywords in pairs(patterns) do
+      for _, keyword in ipairs(keywords) do
+         if msg:find(keyword, 1, true) then
+            return true, category, message
+         end
+      end
+   end
+   
+   return false
+end
+
+-- Extract target from message
+local function ExtractPathfindingTarget(message)
+   local msg = message:lower()
+   
+   -- Try to extract player name
+   for _, player in ipairs(Players:GetPlayers()) do
+      if msg:find(player.Name:lower(), 1, true) then
+         return player.Name, "player"
+      end
+   end
+   
+   -- Extended location keywords with their workspace search terms
+   local locationMappings = {
+      -- Spawn locations
+      {keywords = {"spawn", "start"}, searches = {"Spawn", "spawn", "Start", "start", "SpawnLocation"}},
+      
+      -- End locations
+      {keywords = {"finish", "end", "exit", "goal", "win", "complete"}, 
+       searches = {"Finish", "finish", "End", "end", "Exit", "exit", "Goal", "goal", "Win", "win"}},
+      
+      -- Common structures
+      {keywords = {"tower", "towers"}, searches = {"Tower", "tower"}},
+      {keywords = {"door", "doors"}, searches = {"Door", "door"}},
+      {keywords = {"flag", "flags"}, searches = {"Flag", "flag"}},
+      {keywords = {"checkpoint"}, searches = {"Checkpoint", "checkpoint", "Check"}},
+      {keywords = {"entrance"}, searches = {"Entrance", "entrance"}},
+      {keywords = {"platform"}, searches = {"Platform", "platform"}},
+      {keywords = {"base"}, searches = {"Base", "base"}},
+      {keywords = {"lobby"}, searches = {"Lobby", "lobby"}},
+      {keywords = {"safe zone", "safezone"}, searches = {"SafeZone", "Safe Zone", "safe zone"}}
+   }
+   
+   -- Check each mapping
+   for _, mapping in ipairs(locationMappings) do
+      for _, keyword in ipairs(mapping.keywords) do
+         if msg:find(keyword, 1, true) then
+            -- Try to find the actual part in workspace
+            for _, searchTerm in ipairs(mapping.searches) do
+               local found = workspace:FindFirstChild(searchTerm, true)
+               if found then
+                  print("[PathfindingTarget] Found:", found:GetFullName())
+                  return found, "location"
+               end
+            end
+            -- Return keyword even if not found (let pathfinding module handle it)
+            return keyword, "location"
+         end
+      end
+   end
+   
+   return nil, "unknown"
+end
+
+-- Pathfinding Mode Choice GUI
+local PathfindingChoiceGui = nil
+local CurrentPathfindingChoice = nil
+local ChoiceTimeout = nil
+
+local function CreatePathfindingChoiceGui(target, userMessage)
+   -- Destroy existing GUI if any
+   if PathfindingChoiceGui then
+      PathfindingChoiceGui:Destroy()
+   end
+   
+   CurrentPathfindingChoice = nil
+   
+   -- Create ScreenGui
+   PathfindingChoiceGui = Instance.new("ScreenGui")
+   PathfindingChoiceGui.Name = "PathfindingChoice"
+   PathfindingChoiceGui.ResetOnSpawn = false
+   PathfindingChoiceGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+   PathfindingChoiceGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+   
+   -- Background Frame
+   local Background = Instance.new("Frame")
+   Background.Name = "Background"
+   Background.Size = UDim2.new(0, 400, 0, 280)
+   Background.Position = UDim2.new(0.5, -200, 0.5, -140)
+   Background.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+   Background.BackgroundTransparency = 0.5
+   Background.BorderSizePixel = 0
+   Background.Parent = PathfindingChoiceGui
+   
+   -- Corner
+   local Corner = Instance.new("UICorner")
+   Corner.CornerRadius = UDim.new(0, 12)
+   Corner.Parent = Background
+   
+   -- Title
+   local Title = Instance.new("TextLabel")
+   Title.Name = "Title"
+   Title.Size = UDim2.new(1, -20, 0, 40)
+   Title.Position = UDim2.new(0, 10, 0, 10)
+   Title.BackgroundTransparency = 1
+   Title.Text = "Choose Pathfinding Mode"
+   Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+   Title.TextSize = 20
+   Title.Font = Enum.Font.GothamBold
+   Title.Parent = Background
+   
+   -- Subtitle
+   local Subtitle = Instance.new("TextLabel")
+   Subtitle.Name = "Subtitle"
+   Subtitle.Size = UDim2.new(1, -20, 0, 30)
+   Subtitle.Position = UDim2.new(0, 10, 0, 50)
+   Subtitle.BackgroundTransparency = 1
+   Subtitle.Text = "Target: " .. (typeof(target) == "Instance" and target.Name or tostring(target))
+   Subtitle.TextColor3 = Color3.fromRGB(200, 200, 200)
+   Subtitle.TextSize = 14
+   Subtitle.Font = Enum.Font.Gotham
+   Subtitle.Parent = Background
+   
+   -- Timer Label
+   local TimerLabel = Instance.new("TextLabel")
+   TimerLabel.Name = "Timer"
+   TimerLabel.Size = UDim2.new(1, -20, 0, 20)
+   TimerLabel.Position = UDim2.new(0, 10, 0, 80)
+   TimerLabel.BackgroundTransparency = 1
+   TimerLabel.Text = "Auto-selecting Basic in 10s..."
+   TimerLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+   TimerLabel.TextSize = 12
+   TimerLabel.Font = Enum.Font.Gotham
+   TimerLabel.Parent = Background
+   
+   -- Button creator function
+   local function CreateButton(name, mode, description, yPos, color)
+      local Button = Instance.new("TextButton")
+      Button.Name = name
+      Button.Size = UDim2.new(1, -20, 0, 45)
+      Button.Position = UDim2.new(0, 10, 0, yPos)
+      Button.BackgroundColor3 = color
+      Button.BackgroundTransparency = 0.2
+      Button.BorderSizePixel = 0
+      Button.Text = ""
+      Button.Parent = Background
+      
+      local BtnCorner = Instance.new("UICorner")
+      BtnCorner.CornerRadius = UDim.new(0, 8)
+      BtnCorner.Parent = Button
+      
+      local BtnTitle = Instance.new("TextLabel")
+      BtnTitle.Size = UDim2.new(1, -10, 0, 20)
+      BtnTitle.Position = UDim2.new(0, 5, 0, 5)
+      BtnTitle.BackgroundTransparency = 1
+      BtnTitle.Text = name
+      BtnTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+      BtnTitle.TextSize = 16
+      BtnTitle.Font = Enum.Font.GothamBold
+      BtnTitle.TextXAlignment = Enum.TextXAlignment.Left
+      BtnTitle.Parent = Button
+      
+      local BtnDesc = Instance.new("TextLabel")
+      BtnDesc.Size = UDim2.new(1, -10, 0, 18)
+      BtnDesc.Position = UDim2.new(0, 5, 0, 25)
+      BtnDesc.BackgroundTransparency = 1
+      BtnDesc.Text = description
+      BtnDesc.TextColor3 = Color3.fromRGB(220, 220, 220)
+      BtnDesc.TextSize = 11
+      BtnDesc.Font = Enum.Font.Gotham
+      BtnDesc.TextXAlignment = Enum.TextXAlignment.Left
+      BtnDesc.Parent = Button
+      
+      Button.MouseButton1Click:Connect(function()
+         CurrentPathfindingChoice = mode
+         if ChoiceTimeout then
+            ChoiceTimeout:Disconnect()
+         end
+         PathfindingChoiceGui:Destroy()
+      end)
+      
+      return Button
+   end
+   
+   -- Create buttons
+   CreateButton("Basic Mode", "basic", "Simple navigation, flat terrain, buildings", 110, Color3.fromRGB(50, 150, 255))
+   CreateButton("Obby Mode", "obby", "Obstacle courses with death learning", 165, Color3.fromRGB(255, 150, 50))
+   CreateButton("Advanced Mode", "advanced", "Precise jumps, moving platforms", 220, Color3.fromRGB(150, 50, 255))
+   
+   -- Start countdown
+   local timeLeft = 10
+   TimerLabel.Text = string.format("Auto-selecting Basic in %ds...", timeLeft)
+   
+   ChoiceTimeout = RunService.Heartbeat:Connect(function(dt)
+      if not PathfindingChoiceGui or not PathfindingChoiceGui.Parent then
+         if ChoiceTimeout then
+            ChoiceTimeout:Disconnect()
+         end
+         return
+      end
+      
+      timeLeft = timeLeft - dt
+      TimerLabel.Text = string.format("Auto-selecting Basic in %.1fs...", math.max(0, timeLeft))
+      
+      if timeLeft <= 0 then
+         CurrentPathfindingChoice = "basic"
+         ChoiceTimeout:Disconnect()
+         PathfindingChoiceGui:Destroy()
+      end
+   end)
+   
+   print("[Pathfinding Choice] GUI created - waiting for user selection...")
+end
+
+local function WaitForPathfindingChoice()
+   -- Wait for user to make a choice or timeout
+   local maxWait = 10
+   local waited = 0
+   
+   while not CurrentPathfindingChoice and waited < maxWait do
+      task.wait(0.1)
+      waited = waited + 0.1
+   end
+   
+   local choice = CurrentPathfindingChoice or "basic"
+   print("[Pathfinding Choice] Selected:", choice)
+   return choice
+end
+
+-- Execute pathfinding command
+local function ExecutePathfindingCommand(message, senderName)
+   if not Config.PathfindingEnabled or not LoadedModules.Pathfinding then
+      return false
+   end
+   
+   local isPathfinding, category, fullMessage = DetectPathfindingRequest(message)
+   
+   if not isPathfinding then
+      return false
+   end
+   
+   print("========== PATHFINDING REQUEST ==========")
+   print("From:", senderName or "Debug")
+   print("Message:", message)
+   print("Category:", category)
+   
+   -- Extract target
+   local target, targetType = ExtractPathfindingTarget(message)
+   
+   if not target then
+      print("Could not determine target from message")
+      print("========================================")
+      return false
+   end
+   
+   print("Target:", target, "(" .. targetType .. ")")
+   
+   -- Show GUI for mode selection (unless obby explicitly requested)
+   local mode = "basic"
+   
+   if category == "obby" then
+      mode = "obby"  -- User explicitly said obby
+      print("Mode: obby (explicit)")
+   else
+      -- Show GUI and wait for user choice
+      print("Showing mode selection GUI...")
+      CreatePathfindingChoiceGui(target, message)
+      mode = WaitForPathfindingChoice()
+   end
+   
+   print("Mode:", mode)
+   print("========================================")
+   
+   -- Execute pathfinding
+   spawn(function()
+      local Pathfinding = LoadedModules.Pathfinding
+      local success = Pathfinding.Navigate(target, mode)
+      
+      if success then
+         print("[Pathfinding] Successfully reached target!")
+      else
+         print("[Pathfinding] Failed to reach target")
+      end
+   end)
+   
+   return true
+end
+
+-- ========================================
+-- ACTION COMMAND SYSTEM (Smart Parser)
+-- ========================================
+
+-- Extract numbers from text
+local function ExtractNumber(text, keyword)
+   -- Look for patterns like "jump 20 times" or "jump 5x" or "jump twenty"
+   local patterns = {
+      keyword .. "%s+(%d+)%s*times?",  -- "jump 20 times"
+      keyword .. "%s+(%d+)x",           -- "jump 5x"
+      keyword .. "%s+(%d+)",            -- "jump 10"
+      "(%d+)%s*" .. keyword,            -- "20 jumps"
+   }
+   
+   for _, pattern in ipairs(patterns) do
+      local num = text:match(pattern)
+      if num then
+         return tonumber(num)
+      end
+   end
+   
+   -- Check for word numbers
+   local wordNumbers = {
+      one = 1, two = 2, three = 3, four = 4, five = 5,
+      six = 6, seven = 7, eight = 8, nine = 9, ten = 10,
+      twenty = 20, thirty = 30, fifty = 50
+   }
+   
+   for word, num in pairs(wordNumbers) do
+      if text:find(word .. "%s+" .. keyword) or text:find(keyword .. "%s+" .. word) then
+         return num
+      end
+   end
+   
+   return 1 -- Default to 1 if no number found
+end
+
+-- Detect actions with quantities and sequences
+local function DetectSmartActions(message)
+   local msg = message:lower()
+   local actionSequence = {}
+   
+   -- Action keywords with aliases
+   local actionPatterns = {
+      jump = {"jump", "hop", "leap"},
+      sit = {"sit", "sit down"},
+      stand = {"stand", "stand up", "get up"},
+      dance = {"dance", "boogie"},
+      wave = {"wave"},
+      point = {"point"},
+      cheer = {"cheer"},
+      laugh = {"laugh", "lol"},
+      follow = {"follow", "come here", "come to me"},
+      stop = {"stop", "halt"}
+   }
+   
+   -- Detect each action with quantity
+   for action, keywords in pairs(actionPatterns) do
+      for _, keyword in ipairs(keywords) do
+         if msg:find(keyword, 1, true) then
+            local count = ExtractNumber(msg, keyword)
+            
+            -- Cap at 50 to prevent spam
+            count = math.min(count, 50)
+            
+            table.insert(actionSequence, {
+               action = action,
+               count = count,
+               keyword = keyword
+            })
+            break
+         end
+      end
+   end
+   
+   -- Sort by order of appearance in message
+   table.sort(actionSequence, function(a, b)
+      local posA = msg:find(a.keyword, 1, true) or 9999
+      local posB = msg:find(b.keyword, 1, true) or 9999
+      return posA < posB
+   end)
+   
+   return actionSequence
+end
+
+-- Execute a single action
+local function PerformAction(actionName, context)
+   if not Config.ActionsEnabled or not LoadedModules.Actions then
+      return false
+   end
+   
+   local Actions = LoadedModules.Actions
+   
+   if actionName == "jump" then
+      return Actions.Jump()
+   elseif actionName == "sit" then
+      return Actions.Sit()
+   elseif actionName == "stand" then
+      return Actions.Stand()
+   elseif actionName == "dance" then
+      return Actions.Dance()
+   elseif actionName == "wave" then
+      return Actions.Wave()
+   elseif actionName == "point" then
+      return Actions.Point()
+   elseif actionName == "cheer" then
+      return Actions.Cheer()
+   elseif actionName == "laugh" then
+      return Actions.Laugh()
+   elseif actionName == "follow" and context.senderName then
+      return Actions.WalkToPlayer(context.senderName)
+   elseif actionName == "stop" then
+      return Actions.Stop()
+   end
+   
+   return false
+end
+
+-- Execute action sequence with quantities
+local function ExecuteActionSequence(sequence, context)
+   if #sequence == 0 then return false end
+   
+   print("========== ACTION SEQUENCE ==========")
+   for i, item in ipairs(sequence) do
+      print(string.format("%d. %s x%d", i, item.action, item.count))
+   end
+   print("====================================")
+   
+   spawn(function()
+      for _, item in ipairs(sequence) do
+         local actionName = item.action
+         local count = item.count
+         
+         print(string.format("Executing: %s (x%d)", actionName, count))
+         
+         for i = 1, count do
+            local success = PerformAction(actionName, context)
+            
+            if success then
+               print(string.format("✓ %s (%d/%d)", actionName, i, count))
+            else
+               warn(string.format("✗ %s failed (%d/%d)", actionName, i, count))
+            end
+            
+            -- Delay between repetitions (except for last one)
+            if i < count then
+               if actionName == "jump" then
+                  task.wait(1.0) -- Jump needs time to land before next jump
+               elseif actionName == "sit" or actionName == "stand" then
+                  task.wait(0.3) -- Sit/stand quick toggle
+               else
+                  task.wait(0.2) -- Emotes
+               end
+            end
+         end
+         
+         -- Delay between different actions
+         if _ < #sequence then
+            task.wait(0.5)
+         end
+      end
+      
+      print("========== SEQUENCE COMPLETE ==========")
+   end)
+   
+   return true
+end
+
+-- Chat Listener for Auto-Response
+TextChatService.OnIncomingMessage = function(messageData)
+   local props = Instance.new("TextChatMessageProperties")
+   
+   if Config.ChatbotEnabled and messageData.TextSource then
+      spawn(function()
+         local sender = Players:GetPlayerByUserId(messageData.TextSource.UserId)
+         
+         if sender and sender ~= LocalPlayer then
+            -- AGE GROUP CHECK (13+ vs <13)
+            if not CanChatWithPlayer(sender) then
+               print(string.format("🚫 Cannot chat with %s (different age group)", sender.Name))
+               return
+            end
+            
+            -- ANTI-SPAM CHECK
+            local allowed, reason = CheckRateLimit(sender.Name)
+            
+            if not allowed then
+               print(string.format("🚫 Blocked message from %s: %s", sender.Name, reason))
+               -- Optionally notify the user (uncomment if you want)
+               -- SendChatMessage(reason)
+               return
+            end
+            
+            Memory:AddUserMessage(sender.Name, messageData.Text, false)
+            
+            -- Reset auto-greet timer (bot is active)
+            AutoGreet.lastActivity = tick()
+            
+            -- Check for pathfinding commands first
+            local isPathfindingCmd = ExecutePathfindingCommand(messageData.Text, sender.Name)
+            
+            -- Detect and execute smart action sequences
+            if not isPathfindingCmd then
+               local actionSequence = DetectSmartActions(messageData.Text)
+               if #actionSequence > 0 then
+                  ExecuteActionSequence(actionSequence, {senderName = sender.Name})
+               end
+            end
+            
+            if LocalPlayer.Character and sender.Character then
+               local playerRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+               local senderRoot = sender.Character:FindFirstChild("HumanoidRootPart")
+               
+               if playerRoot and senderRoot then
+                  local distance = (playerRoot.Position - senderRoot.Position).Magnitude
+                  
+                  if distance <= Config.ResponseDistance then
+                     -- Get display name
+                     local displayName = GetPlayerDisplayName(sender)
+                     
+                     -- Get AI response with user context
+                     local aiReply = GetAIResponse(messageData.Text, sender.Name, displayName)
+                     
+                     if aiReply then
+                        -- Store AI's response in memory
+                        Memory:AddUserMessage(sender.Name, aiReply, true)
+                        
+                        wait(0.5) -- Small delay to seem more natural
+                        SendChatMessage(aiReply)
+                     end
+                  end
+               end
+            end
+         end
+      end)
+   end
+   
+   return props
+end
+
+-- ========================================
+-- TAB 1: API SETUP
+-- ========================================
+
+local ApiTab = Window:CreateTab("API Setup", 4483362458)
+
+local ApiSection = ApiTab:CreateSection("OpenRouter Configuration")
+
+local ApiKeyParagraph = ApiTab:CreateParagraph({
+   Title = "Free AI Models Included",
+   Content = "This script includes 3 free AI models with built-in API keys! You can also use your own key from openrouter.ai for additional models."
+})
+
+local ChatbotNameInput = ApiTab:CreateInput({
+   Name = "Chatbot Name",
+   PlaceholderText = "AI Assistant",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      if value and value ~= "" then
+         Config.ChatbotName = value
+         -- Update all personality prompts with new name
+         for key, prompt in pairs(Personalities) do
+            Personalities[key] = prompt:gsub("{name}", value)
+         end
+         Rayfield:Notify({
+            Title = "Name Updated",
+            Content = "Chatbot is now called: " .. value,
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local ApiKeyInput = ApiTab:CreateInput({
+   Name = "Custom API Key (Optional)",
+   PlaceholderText = "sk-or-v1-... (leave empty to use free models)",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      Config.ApiKey = value
+      if value ~= "" then
+         Rayfield:Notify({
+            Title = "Success",
+            Content = "Custom API Key saved!",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local ModelParagraph = ApiTab:CreateParagraph({
+   Title = "Select AI Model",
+   Content = "Choose from available free models. Each model has different characteristics and built-in API keys."
+})
+
+local ModelDropdown = ApiTab:CreateDropdown({
+   Name = "AI Model",
+   Options = AvailableModels,
+   CurrentOption = {Config.Model},
+   Flag = "ModelSelection",
+   Callback = function(selectedModel)
+      -- Handle if selectedModel is a table (CurrentOption format)
+      if type(selectedModel) == "table" then
+         selectedModel = selectedModel[1]
+      end
+      
+      Config.Model = selectedModel
+      
+      -- Check if this model has a built-in API key
+      local hasBuiltInKey = ModelApiKeys[selectedModel] ~= nil
+      
+      Rayfield:Notify({
+         Title = "Model Changed",
+         Content = selectedModel .. (hasBuiltInKey and " (Built-in key)" or ""),
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+-- ========================================
+-- TAB 2: CHATBOT CONTROLS
+-- ========================================
+
+local ChatTab = Window:CreateTab("Chatbot", 4483362458)
+
+local ChatSection = ChatTab:CreateSection("Chatbot Settings")
+
+local ChatbotInfoParagraph = ChatTab:CreateParagraph({
+   Title = "Auto-Reply System",
+   Content = "When enabled, the AI will automatically respond to nearby players' messages in chat."
+})
+
+local ChatbotToggle = ChatTab:CreateToggle({
+   Name = "Enable AI Chatbot",
+   CurrentValue = false,
+   Flag = "ChatbotEnabled",
+   Callback = function(value)
+      -- Check if we have either a custom key or a built-in model key
+      local hasKey = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) or (ModelApiKeys[Config.Model] ~= nil)
+      
+      if not hasKey then
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "Please select a free model or set custom API Key!",
+            Duration = 4,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      Config.ChatbotEnabled = value
+      
+      if value then
+         Rayfield:Notify({
+            Title = "Chatbot Enabled",
+            Content = Config.ChatbotName .. " will respond to nearby players",
+            Duration = 3,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Chatbot Disabled",
+            Content = "AI responses are now off",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local DistanceParagraph = ChatTab:CreateParagraph({
+   Title = "Response Distance",
+   Content = "Set how close players need to be (in studs) for the AI to respond to them."
+})
+
+local DistanceSlider = ChatTab:CreateSlider({
+   Name = "Distance (Studs)",
+   Range = {5, 100},
+   Increment = 5,
+   CurrentValue = 20,
+   Flag = "ResponseDistance",
+   Callback = function(value)
+      Config.ResponseDistance = value
+   end
+})
+
+local ChatLengthParagraph = ChatTab:CreateParagraph({
+   Title = "Chat Message Length",
+   Content = "Roblox has a 200 character limit per message. Adjust this if needed (lower = more concise AI responses)."
+})
+
+local ChatLengthSlider = ChatTab:CreateSlider({
+   Name = "Max Characters",
+   Range = {50, 200},
+   Increment = 10,
+   CurrentValue = 200,
+   Flag = "MaxChatLength",
+   Callback = function(value)
+      Config.MaxChatLength = value
+      Rayfield:Notify({
+         Title = "Chat Limit Updated",
+         Content = "Max length: " .. value .. " characters",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+local MessageFormattingSection = ChatTab:CreateSection("Message Formatting")
+
+local MultiMessageToggle = ChatTab:CreateToggle({
+   Name = "Multi-Message Mode",
+   CurrentValue = false,
+   Flag = "EnableMultiMessage",
+   Callback = function(value)
+      Config.EnableMultiMessage = value
+      
+      if value then
+         Rayfield:Notify({
+            Title = "Multi-Message Enabled",
+            Content = "Long messages will split into parts (1/2, 2/2)",
+            Duration = 4,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Multi-Message Disabled",
+            Content = "Long messages will be truncated with ...",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local AIPrefixToggle = ChatTab:CreateToggle({
+   Name = "Add [AI] Prefix",
+   CurrentValue = false,
+   Flag = "EnableAIPrefix",
+   Callback = function(value)
+      Config.EnableAIPrefix = value
+      
+      if value then
+         Rayfield:Notify({
+            Title = "AI Prefix Enabled",
+            Content = "All messages will start with [AI]",
+            Duration = 3,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "AI Prefix Disabled",
+            Content = "Messages sent without prefix",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local FormattingExample = ChatTab:CreateParagraph({
+   Title = "Examples",
+   Content = "Multi-Message: 'Hello! (1/2)' then 'World! (2/2)'\n\nWith Prefix: '[AI] Hello World!'\n\nBoth: '[AI] Hello! (1/2)' then '[AI] World! (2/2)'"
+})
+
+local AntiSpamSection = ChatTab:CreateSection("Anti-Spam Protection")
+
+local AntiSpamInfo = ChatTab:CreateParagraph({
+   Title = "Rate Limiting",
+   Content = "Prevents spam by limiting how fast users can send messages. Protects against spam and abuse."
+})
+
+local UserCooldownSlider = ChatTab:CreateSlider({
+   Name = "User Cooldown (seconds)",
+   Range = {1, 10},
+   Increment = 0.5,
+   CurrentValue = 2,
+   Flag = "UserCooldown",
+   Callback = function(value)
+      Config.UserCooldown = value
+      Rayfield:Notify({
+         Title = "Cooldown Updated",
+         Content = "Users must wait " .. value .. "s between messages",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local GlobalCooldownSlider = ChatTab:CreateSlider({
+   Name = "Global Cooldown (seconds)",
+   Range = {0.1, 2},
+   Increment = 0.1,
+   CurrentValue = 0.5,
+   Flag = "GlobalCooldown",
+   Callback = function(value)
+      Config.GlobalCooldown = value
+      Rayfield:Notify({
+         Title = "Global Cooldown Updated",
+         Content = "Min " .. value .. "s between ANY messages",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local SpamThresholdSlider = ChatTab:CreateSlider({
+   Name = "Spam Threshold (messages)",
+   Range = {3, 10},
+   Increment = 1,
+   CurrentValue = 5,
+   Flag = "SpamThreshold",
+   Callback = function(value)
+      Config.SpamThreshold = value
+      Rayfield:Notify({
+         Title = "Spam Threshold Updated",
+         Content = value .. " messages in 10s = 30s block",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local AntiSpamStatusLabel = ChatTab:CreateLabel("Status: Ready")
+
+local function UpdateAntiSpamStatus()
+   local status = GetAntiSpamStatus()
+   local text = string.format("Queue: %d | Blocked: %d | Recent: %d msgs",
+      status.queueSize,
+      status.blockedUsers,
+      status.recentMessages
+   )
+   AntiSpamStatusLabel:Set(text)
+end
+
+local RefreshAntiSpamButton = ChatTab:CreateButton({
+   Name = "Refresh Anti-Spam Status",
+   Callback = function()
+      UpdateAntiSpamStatus()
+      local status = GetAntiSpamStatus()
+      
+      if status.blockedUsers > 0 then
+         print("========== BLOCKED USERS ==========")
+         for _, info in ipairs(status.blockedList) do
+            print("• " .. info)
+         end
+         print("===================================")
+      end
+      
+      Rayfield:Notify({
+         Title = "Anti-Spam Status",
+         Content = string.format("Blocked: %d users", status.blockedUsers),
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local UnblockAllButton = ChatTab:CreateButton({
+   Name = "Unblock All Users",
+   Callback = function()
+      local count = 0
+      for username, _ in pairs(AntiSpam.blockedUsers) do
+         count = count + 1
+      end
+      
+      AntiSpam.blockedUsers = {}
+      AntiSpam.spamLog = {}
+      
+      Rayfield:Notify({
+         Title = "Unblocked",
+         Content = "Unblocked " .. count .. " users",
+         Duration = 3,
+         Image = 4483362458
+      })
+      
+      UpdateAntiSpamStatus()
+   end
+})
+
+-- Auto-update anti-spam status every 5 seconds
+spawn(function()
+   while true do
+      wait(5)
+      if Config.ChatbotEnabled then
+         UpdateAntiSpamStatus()
+      end
+   end
+end)
+
+-- ========================================
+-- TAB 3: PERSONALITY PROMPTS
+-- ========================================
+
+local PromptsTab = Window:CreateTab("Prompts", 4483362458)
+
+local PresetSection = PromptsTab:CreateSection("Preset Personalities")
+
+local PresetParagraph = PromptsTab:CreateParagraph({
+   Title = "Choose Personality",
+   Content = "Select a preset personality for your AI chatbot or create your own custom prompt below."
+})
+
+local PersonalityDropdown = PromptsTab:CreateDropdown({
+   Name = "Personality",
+   Options = {"Default", "Nerd", "Waifu", "Furry", "Robot"},
+   CurrentOption = {"Default"},
+   Flag = "PersonalitySelection",
+   Callback = function(selectedPersonality)
+      -- Handle if selectedPersonality is a table
+      if type(selectedPersonality) == "table" then
+         selectedPersonality = selectedPersonality[1]
+      end
+      
+      -- Get the base prompt and replace {name} with chatbot name
+      local basePrompt = Personalities[selectedPersonality]
+      Config.CurrentPrompt = basePrompt:gsub("{name}", Config.ChatbotName)
+      
+      Rayfield:Notify({
+         Title = "Personality Changed",
+         Content = "Now using: " .. selectedPersonality,
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local CustomSection = PromptsTab:CreateSection("Custom Prompts")
+
+local CustomParagraph = PromptsTab:CreateParagraph({
+   Title = "Create Custom Prompt",
+   Content = "Design your own AI personality by entering a custom system prompt below."
+})
+
+local CustomPromptName = ""
+local CustomPromptText = ""
+
+local PromptNameInput = PromptsTab:CreateInput({
+   Name = "Prompt Name",
+   PlaceholderText = "e.g., Pirate, Detective, etc.",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      CustomPromptName = value
+   end
+})
+
+local PromptTextInput = PromptsTab:CreateInput({
+   Name = "Prompt Text",
+   PlaceholderText = "You are a...",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      CustomPromptText = value
+   end
+})
+
+local AddCustomPromptButton = PromptsTab:CreateButton({
+   Name = "Add & Activate Custom Prompt",
+   Callback = function()
+      if CustomPromptName ~= "" and CustomPromptText ~= "" then
+         CustomPrompts[CustomPromptName] = CustomPromptText
+         Config.CurrentPrompt = CustomPromptText
+         
+         Rayfield:Notify({
+            Title = "Custom Prompt Added",
+            Content = "'" .. CustomPromptName .. "' is now active!",
+            Duration = 4,
+            Image = 4483362458
+         })
+         
+         -- Reset fields
+         CustomPromptName = ""
+         CustomPromptText = ""
+      else
+         Rayfield:Notify({
+            Title = "Invalid Input",
+            Content = "Please fill in both name and text fields",
+            Duration = 4,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+-- ========================================
+-- TAB 4: DEBUG & TESTING
+-- ========================================
+
+local DebugTab = Window:CreateTab("Debug", 4483362458)
+
+-- ========================================
+-- SECTION 1: BASIC AI TESTING
+-- ========================================
+
+local BasicTestSection = DebugTab:CreateSection("Basic AI Testing")
+
+local BasicTestParagraph = DebugTab:CreateParagraph({
+   Title = "Quick AI Test",
+   Content = "Test AI responses without memory or user context. Fast way to verify AI is working."
+})
+
+local DebugInput = ""
+
+local DebugMessageInput = DebugTab:CreateInput({
+   Name = "Test Message",
+   PlaceholderText = "Type your message here...",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      DebugInput = value
+   end
+})
+
+local ResponseLabel = DebugTab:CreateLabel("Last Response: " .. LastDebugResponse)
+
+local SendDebugButton = DebugTab:CreateButton({
+   Name = "Send to AI (No Memory)",
+   Callback = function()
+      -- Check if we have an API key
+      local hasKey = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) or (ModelApiKeys[Config.Model] ~= nil)
+      
+      if not hasKey then
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "Model: " .. Config.Model .. " - No key found!",
+            Duration = 4,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      if DebugInput == "" or DebugInput == nil then
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "Please enter a test message first!",
+            Duration = 4,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      Rayfield:Notify({
+         Title = "Processing",
+         Content = "Waiting for AI response...",
+         Duration = 2,
+         Image = 4483362458
+      })
+      
+      local aiResponse = GetAIResponse(DebugInput, nil)  -- No username = no memory
+      
+      if aiResponse then
+         LastDebugResponse = aiResponse
+         ResponseLabel:Set("Last Response: " .. aiResponse:sub(1, 100) .. (aiResponse:len() > 100 and "..." or ""))
+         Rayfield:Notify({
+            Title = "AI Response",
+            Content = aiResponse,
+            Duration = 8,
+            Image = 4483362458
+         })
+      else
+         LastDebugResponse = "Error: No response received"
+         ResponseLabel:Set("Last Response: Error - No response received")
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "Failed to get AI response",
+            Duration = 5,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+-- ========================================
+-- SECTION 2: MULTI-USER CONVERSATION SIMULATOR
+-- ========================================
+
+local MultiUserSection = DebugTab:CreateSection("Multi-User Simulator")
+
+local MultiUserParagraph = DebugTab:CreateParagraph({
+   Title = "Simulate Multiple Users",
+   Content = "Test conversations as different users. Each user has separate memory. Test if User1 can reference User2!"
+})
+
+local User1Name = "TestUser1"
+local User2Name = "TestUser2"
+local User1Message = ""
+local User2Message = ""
+
+local User1NameInput = DebugTab:CreateInput({
+   Name = "User 1 Name",
+   PlaceholderText = "menamjulia",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      if value ~= "" then
+         User1Name = value
+      end
+   end
+})
+
+local User1MessageInput = DebugTab:CreateInput({
+   Name = "User 1 Message",
+   PlaceholderText = "Hello AI!",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      User1Message = value
+   end
+})
+
+local SendAsUser1Button = DebugTab:CreateButton({
+   Name = "Send as User 1",
+   Callback = function()
+      if User1Message == "" then
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "User 1 needs a message!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      Rayfield:Notify({
+         Title = "Simulating " .. User1Name,
+         Content = "Getting AI response...",
+         Duration = 2,
+         Image = 4483362458
+      })
+      
+      -- Store message in memory as User1
+      Memory:AddUserMessage(User1Name, User1Message, false)
+      
+      -- Get AI response with User1's context
+      local aiResponse = GetAIResponse(User1Message, User1Name)
+      
+      if aiResponse then
+         -- Store AI response in User1's memory
+         Memory:AddUserMessage(User1Name, aiResponse, true)
+         
+         Rayfield:Notify({
+            Title = "AI → " .. User1Name,
+            Content = aiResponse,
+            Duration = 6,
+            Image = 4483362458
+         })
+         
+         print("========== CONVERSATION ==========")
+         print(User1Name .. ":", User1Message)
+         print("AI:", aiResponse)
+         print("==================================")
+      else
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "AI failed to respond",
+            Duration = 4,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local User2NameInput = DebugTab:CreateInput({
+   Name = "User 2 Name",
+   PlaceholderText = "CoolGuy99",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      if value ~= "" then
+         User2Name = value
+      end
+   end
+})
+
+local User2MessageInput = DebugTab:CreateInput({
+   Name = "User 2 Message",
+   PlaceholderText = "What did TestUser1 say?",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      User2Message = value
+   end
+})
+
+local SendAsUser2Button = DebugTab:CreateButton({
+   Name = "Send as User 2",
+   Callback = function()
+      if User2Message == "" then
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "User 2 needs a message!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      Rayfield:Notify({
+         Title = "Simulating " .. User2Name,
+         Content = "Getting AI response...",
+         Duration = 2,
+         Image = 4483362458
+      })
+      
+      -- Store message in memory as User2
+      Memory:AddUserMessage(User2Name, User2Message, false)
+      
+      -- Get AI response with User2's context
+      local aiResponse = GetAIResponse(User2Message, User2Name)
+      
+      if aiResponse then
+         -- Store AI response in User2's memory
+         Memory:AddUserMessage(User2Name, aiResponse, true)
+         
+         Rayfield:Notify({
+            Title = "AI → " .. User2Name,
+            Content = aiResponse,
+            Duration = 6,
+            Image = 4483362458
+         })
+         
+         print("========== CONVERSATION ==========")
+         print(User2Name .. ":", User2Message)
+         print("AI:", aiResponse)
+         print("==================================")
+      else
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "AI failed to respond",
+            Duration = 4,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local ViewSimulatorMemoryButton = DebugTab:CreateButton({
+   Name = "View Both Users' Memories",
+   Callback = function()
+      local output = "========== SIMULATOR MEMORY ==========\n\n"
+      
+      output = output .. "--- " .. User1Name .. " ---\n"
+      output = output .. Memory:GetUserHistory(User1Name, 10)
+      
+      output = output .. "\n--- " .. User2Name .. " ---\n"
+      output = output .. Memory:GetUserHistory(User2Name, 10)
+      
+      output = output .. "\n====================================="
+      
+      print(output)
+      
+      if setclipboard then
+         setclipboard(output)
+         Rayfield:Notify({
+            Title = "Memories Copied",
+            Content = "Both conversations copied to clipboard",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local ClearSimulatorButton = DebugTab:CreateButton({
+   Name = "Clear Simulator Memories",
+   Callback = function()
+      Memory:ClearUserMemory(User1Name)
+      Memory:ClearUserMemory(User2Name)
+      
+      Rayfield:Notify({
+         Title = "Simulator Reset",
+         Content = "Both test users cleared",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+-- ========================================
+-- SECTION 3: CHAT SYSTEM TESTING
+-- ========================================
+
+local ChatTestSection = DebugTab:CreateSection("Chat System Testing")
+
+local ChatTestParagraph = DebugTab:CreateParagraph({
+   Title = "Test Chat Methods",
+   Content = "Verify which chat method works in your game and test character limits."
+})
+
+local TestChatButton = DebugTab:CreateButton({
+   Name = "Test Chat Methods",
+   Callback = function()
+      print("========== TESTING CHAT METHODS ==========")
+      
+      local testMessage = "Test message from SS Hub AI!"
+      local methodWorked = "None"
+      
+      -- Test Method 1: TextChatService
+      local method1Success = pcall(function()
+         local textChannels = TextChatService:WaitForChild("TextChannels", 2)
+         if textChannels then
+            local generalChannel = textChannels:FindFirstChild("RBXGeneral")
+            if generalChannel and generalChannel:IsA("TextChannel") then
+               generalChannel:SendAsync(testMessage)
+               methodWorked = "TextChatService (Modern)"
+               print("✓ Method 1 WORKS: TextChatService")
+               return true
+            end
+         end
+      end)
+      
+      if not method1Success then
+         print("✗ Method 1 FAILED: TextChatService")
+      end
+      
+      wait(0.5)
+      
+      -- Test Method 2: Legacy Chat
+      if methodWorked == "None" then
+         local method2Success = pcall(function()
+            local chatEvents = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+            if chatEvents and chatEvents:FindFirstChild("SayMessageRequest") then
+               chatEvents.SayMessageRequest:FireServer(testMessage, "All")
+               methodWorked = "Legacy Chat System"
+               print("✓ Method 2 WORKS: Legacy Chat")
+               return true
+            end
+         end)
+         
+         if not method2Success then
+            print("✗ Method 2 FAILED: Legacy Chat")
+         end
+      end
+      
+      wait(0.5)
+      
+      -- Test Method 3: Players:Chat
+      if methodWorked == "None" then
+         local method3Success = pcall(function()
+            if LocalPlayer.Character then
+               game:GetService("Players"):Chat(testMessage)
+               methodWorked = "Players:Chat (Fallback)"
+               print("✓ Method 3 WORKS: Players:Chat")
+               return true
+            end
+         end)
+         
+         if not method3Success then
+            print("✗ Method 3 FAILED: Players:Chat")
+         end
+      end
+      
+      print("========================================")
+      
+      if methodWorked ~= "None" then
+         Rayfield:Notify({
+            Title = "Chat Test Success",
+            Content = "Working method: " .. methodWorked,
+            Duration = 4,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Chat Test Failed",
+            Content = "No working chat method found! Check F9 console",
+            Duration = 5,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+
+local ClearResponseButton = DebugTab:CreateButton({
+   Name = "Clear Last Response",
+   Callback = function()
+      LastDebugResponse = "No response yet"
+      ResponseLabel:Set("Last Response: No response yet")
+      Rayfield:Notify({
+         Title = "Cleared",
+         Content = "Response history cleared",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+
+local TestChatButton = DebugTab:CreateButton({
+   Name = "Test Chat Message Send",
+   Callback = function()
+      print("========== TESTING CHAT METHODS ==========")
+      
+      local testMessage = "Test message from SS Hub AI!"
+      local methodWorked = "None"
+      
+      -- Test Method 1: TextChatService
+      local method1Success = pcall(function()
+         local textChannels = TextChatService:WaitForChild("TextChannels", 2)
+         if textChannels then
+            local generalChannel = textChannels:FindFirstChild("RBXGeneral")
+            if generalChannel and generalChannel:IsA("TextChannel") then
+               generalChannel:SendAsync(testMessage)
+               methodWorked = "TextChatService (Modern)"
+               print("✓ Method 1 WORKS: TextChatService")
+               return true
+            end
+         end
+      end)
+      
+      if not method1Success then
+         print("✗ Method 1 FAILED: TextChatService")
+      end
+      
+      wait(0.5)
+      
+      -- Test Method 2: Legacy Chat
+      if methodWorked == "None" then
+         local method2Success = pcall(function()
+            local chatEvents = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+            if chatEvents and chatEvents:FindFirstChild("SayMessageRequest") then
+               chatEvents.SayMessageRequest:FireServer(testMessage, "All")
+               methodWorked = "Legacy Chat System"
+               print("✓ Method 2 WORKS: Legacy Chat")
+               return true
+            end
+         end)
+         
+         if not method2Success then
+            print("✗ Method 2 FAILED: Legacy Chat")
+         end
+      end
+      
+      wait(0.5)
+      
+      -- Test Method 3: Players:Chat
+      if methodWorked == "None" then
+         local method3Success = pcall(function()
+            if LocalPlayer.Character then
+               game:GetService("Players"):Chat(testMessage)
+               methodWorked = "Players:Chat (Fallback)"
+               print("✓ Method 3 WORKS: Players:Chat")
+               return true
+            end
+         end)
+         
+         if not method3Success then
+            print("✗ Method 3 FAILED: Players:Chat")
+         end
+      end
+      
+      print("========================================")
+      
+      if methodWorked ~= "None" then
+         Rayfield:Notify({
+            Title = "Chat Test Success",
+            Content = "Working method: " .. methodWorked,
+            Duration = 4,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Chat Test Failed",
+            Content = "No working chat method found! Check F9 console",
+            Duration = 5,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local TestAIChatButton = DebugTab:CreateButton({
+   Name = "Test AI Chat Response",
+   Callback = function()
+      -- Check if we have an API key
+      local hasKey = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) or (ModelApiKeys[Config.Model] ~= nil)
+      
+      if not hasKey then
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "Select a free model or set API key first!",
+            Duration = 4,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      Rayfield:Notify({
+         Title = "AI Chat Test",
+         Content = "Getting AI to say something in chat...",
+         Duration = 3,
+         Image = 4483362458
+      })
+      
+      -- Get AI to generate a test message
+      local aiTestPrompt = "Say a short, fun test message to verify you're working. Keep it under 10 words and make it interesting!"
+      local aiResponse = GetAIResponse(aiTestPrompt)
+      
+      if aiResponse then
+         -- Send the AI's response to chat
+         SendChatMessage(aiResponse)
+         
+         Rayfield:Notify({
+            Title = "AI Sent Message",
+            Content = aiResponse,
+            Duration = 5,
+            Image = 4483362458
+         })
+         
+         print("AI Test Message Sent:", aiResponse)
+      else
+         Rayfield:Notify({
+            Title = "AI Test Failed",
+            Content = "Could not get AI response",
+            Duration = 4,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local TestCharLimitButton = DebugTab:CreateButton({
+   Name = "Test Character Limit",
+   Callback = function()
+      -- Generate a long test message
+      local longMessage = "This is a test message to verify the character limit enforcement system is working correctly and will truncate messages that exceed the configured maximum length for Roblox chat which is normally 200 characters but can be adjusted in settings."
+      
+      print("========== CHARACTER LIMIT TEST ==========")
+      print("Original length:", #longMessage)
+      print("Configured limit:", Config.MaxChatLength)
+      print("Multi-Message Mode:", Config.EnableMultiMessage)
+      print("AI Prefix:", Config.EnableAIPrefix)
+      
+      local messageParts = FormatMessage(longMessage)
+      
+      print("Total parts:", #messageParts)
+      for i, part in ipairs(messageParts) do
+         print(string.format("Part %d length: %d", i, #part))
+         print(string.format("Part %d: %s", i, part))
+      end
+      print("========================================")
+      
+      -- Send the formatted message(s)
+      SendChatMessage(longMessage)
+      
+      Rayfield:Notify({
+         Title = "Char Limit Test",
+         Content = string.format("Sent %d part(s) - Check console", #messageParts),
+         Duration = 4,
+         Image = 4483362458
+      })
+   end
+})
+
+-- ========================================
+-- SECTION 4: SYSTEM INFORMATION
+-- ========================================
+
+local DebugInfoSection = DebugTab:CreateSection("System Information")
+
+local ExecutorLabel = DebugTab:CreateLabel("Executor: " .. (identifyexecutor and identifyexecutor() or "Unknown"))
+local HttpMethodLabel = DebugTab:CreateLabel("HTTP Method: " .. (syn and "syn.request" or http_request and "http_request" or request and "request" or "HttpService"))
+local StatusLabel = DebugTab:CreateLabel("Status: Ready")
+local MemoryStatsDebugLabel = DebugTab:CreateLabel("Memory: Loading...")
+
+local function UpdateDebugInfo()
+   ExecutorLabel:Set("Executor: " .. (identifyexecutor and identifyexecutor() or "Unknown"))
+   StatusLabel:Set("Status: " .. (Config.ChatbotEnabled and "Bot Active" or "Bot Inactive"))
+   
+   local stats = Memory:GetStats()
+   MemoryStatsDebugLabel:Set(string.format("Memory: %d users, %d messages", stats.uniqueUsers, stats.globalMessages))
+end
+
+local RefreshInfoButton = DebugTab:CreateButton({
+   Name = "Refresh System Info",
+   Callback = function()
+      UpdateDebugInfo()
+      
+      Rayfield:Notify({
+         Title = "Refreshed",
+         Content = "System info updated",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+local ConnectionTestButton = DebugTab:CreateButton({
+   Name = "Test API Connection",
+   Callback = function()
+      Rayfield:Notify({
+         Title = "Testing Connection",
+         Content = "Checking OpenRouter API...",
+         Duration = 2,
+         Image = 4483362458
+      })
+      
+      local testKey = ModelApiKeys[Config.Model] or Config.ApiKey
+      if not testKey or testKey == "" then
+         Rayfield:Notify({
+            Title = "Connection Test Failed",
+            Content = "No API key configured!",
+            Duration = 4,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local testUrl = "https://openrouter.ai/api/v1/models"
+      local testHeaders = {
+         ["Authorization"] = "Bearer " .. testKey,
+         ["Content-Type"] = "application/json"
+      }
+      
+      local success, response = customHttpRequest(testUrl, "GET", testHeaders, nil)
+      
+      if success then
+         Rayfield:Notify({
+            Title = "Connection Test Success",
+            Content = "OpenRouter API is reachable!",
+            Duration = 4,
+            Image = 4483362458
+         })
+         print("Connection Test: SUCCESS")
+      else
+         Rayfield:Notify({
+            Title = "Connection Test Failed",
+            Content = tostring(response):sub(1, 50),
+            Duration = 5,
+            Image = 4483362458
+         })
+         print("Connection Test: FAILED -", response)
+      end
+   end
+})
+
+-- ========================================
+-- SECTION 5: ADVANCED DEBUG TOOLS
+-- ========================================
+
+local AdvancedDebugSection = DebugTab:CreateSection("Advanced Debug")
+
+local VerboseLogging = false
+
+local VerboseToggle = DebugTab:CreateToggle({
+   Name = "Verbose Console Logging",
+   CurrentValue = false,
+   Flag = "VerboseLogging",
+   Callback = function(value)
+      VerboseLogging = value
+      
+      if value then
+         print("========== VERBOSE LOGGING ENABLED ==========")
+         Rayfield:Notify({
+            Title = "Verbose Logging ON",
+            Content = "All debug info will print to console",
+            Duration = 3,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Verbose Logging OFF",
+            Content = "Reduced console output",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local ShowConfigButton = DebugTab:CreateButton({
+   Name = "Print Current Config",
+   Callback = function()
+      print("========== CURRENT CONFIGURATION ==========")
+      print("Chatbot Name:", Config.ChatbotName)
+      print("Model:", Config.Model)
+      print("Has Custom Key:", Config.ApiKey ~= "")
+      print("Has Built-in Key:", ModelApiKeys[Config.Model] ~= nil)
+      print("Chatbot Enabled:", Config.ChatbotEnabled)
+      print("Response Distance:", Config.ResponseDistance)
+      print("Max Chat Length:", Config.MaxChatLength)
+      print("Current Prompt:", Config.CurrentPrompt)
+      
+      local stats = Memory:GetStats()
+      print("Memory - Users:", stats.uniqueUsers)
+      print("Memory - Global Messages:", stats.globalMessages)
+      print("=========================================")
+      
+      Rayfield:Notify({
+         Title = "Config Printed",
+         Content = "Check console (F9) for full config",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local TestAllModelsButton = DebugTab:CreateButton({
+   Name = "Test All Free Models",
+   Callback = function()
+      Rayfield:Notify({
+         Title = "Testing Models",
+         Content = "Testing all 3 free models...",
+         Duration = 3,
+         Image = 4483362458
+      })
+      
+      local testMessage = "Hello! Reply with just 'OK' if you're working."
+      local testResults = "========== MODEL TEST RESULTS ==========\n"
+      
+      for i, modelName in ipairs(AvailableModels) do
+         local oldModel = Config.Model
+         Config.Model = modelName
+         
+         print("Testing model:", modelName)
+         testResults = testResults .. "\nModel " .. i .. ": " .. modelName .. "\n"
+         
+         local response = GetAIResponse(testMessage)
+         
+         if response then
+            print("✓ Model", modelName, "WORKS:", response:sub(1, 50))
+            testResults = testResults .. "Status: ✓ WORKING\n"
+            testResults = testResults .. "Response: " .. response:sub(1, 100) .. "\n"
+            Rayfield:Notify({
+               Title = "Model " .. i .. "/3 Works",
+               Content = modelName:sub(1, 30),
+               Duration = 2,
+               Image = 4483362458
+            })
+         else
+            print("✗ Model", modelName, "FAILED")
+            testResults = testResults .. "Status: ✗ FAILED\n"
+            Rayfield:Notify({
+               Title = "Model " .. i .. "/3 Failed",
+               Content = modelName:sub(1, 30),
+               Duration = 2,
+               Image = 4483362458
+            })
+         end
+         
+         testResults = testResults .. "---\n"
+         wait(2) -- Longer delay between tests
+         Config.Model = oldModel
+      end
+      
+      testResults = testResults .. "\n========================================="
+      print(testResults)
+      
+      -- Copy to clipboard if available
+      if setclipboard then
+         setclipboard(testResults)
+         Rayfield:Notify({
+            Title = "Testing Complete",
+            Content = "Results copied to clipboard!",
+            Duration = 4,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Testing Complete",
+            Content = "Check console (F9) for results",
+            Duration = 4,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local DumpApiKeysButton = DebugTab:CreateButton({
+   Name = "Verify API Keys Loaded",
+   Callback = function()
+      local keyInfo = "========== API KEYS VERIFICATION ==========\n"
+      
+      print(keyInfo)
+      for model, key in pairs(ModelApiKeys) do
+         local info = "\nModel: " .. model .. "\n"
+         info = info .. "Key (first 20): " .. key:sub(1, 20) .. "\n"
+         info = info .. "Key (last 10): " .. key:sub(-10) .. "\n"
+         info = info .. "Full Key: " .. key .. "\n"
+         info = info .. "---\n"
+         
+         keyInfo = keyInfo .. info
+         print(info)
+      end
+      
+      keyInfo = keyInfo .. "\n========================================="
+      print("=========================================")
+      
+      -- Copy to clipboard if available
+      if setclipboard then
+         setclipboard(keyInfo)
+         Rayfield:Notify({
+            Title = "Keys Copied",
+            Content = "API keys copied to clipboard!",
+            Duration = 3,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Keys Verified",
+            Content = tostring(#AvailableModels) .. " models have keys",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local CopyConfigButton = DebugTab:CreateButton({
+   Name = "Copy Full Config",
+   Callback = function()
+      local configText = "========== CURRENT CONFIGURATION ==========\n"
+      configText = configText .. "Chatbot Name: " .. Config.ChatbotName .. "\n"
+      configText = configText .. "Model: " .. Config.Model .. "\n"
+      configText = configText .. "Has Custom Key: " .. tostring(Config.ApiKey ~= "") .. "\n"
+      configText = configText .. "Has Built-in Key: " .. tostring(ModelApiKeys[Config.Model] ~= nil) .. "\n"
+      configText = configText .. "Chatbot Enabled: " .. tostring(Config.ChatbotEnabled) .. "\n"
+      configText = configText .. "Response Distance: " .. Config.ResponseDistance .. "\n"
+      configText = configText .. "Current Prompt: " .. Config.CurrentPrompt .. "\n"
+      configText = configText .. "Executor: " .. (identifyexecutor and identifyexecutor() or "Unknown") .. "\n"
+      configText = configText .. "=========================================="
+      
+      print(configText)
+      
+      if setclipboard then
+         setclipboard(configText)
+         Rayfield:Notify({
+            Title = "Config Copied",
+            Content = "Configuration copied to clipboard!",
+            Duration = 3,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Config Printed",
+            Content = "Check console (F9) for config",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+-- ========================================
+-- TAB 5: MODULES
+-- ========================================
+
+local ModulesTab = Window:CreateTab("Modules", 4483362458)
+
+local ModulesSection = ModulesTab:CreateSection("Actions Module")
+
+local ActionsInfoParagraph = ModulesTab:CreateParagraph({
+   Title = "Character Actions",
+   Content = "Enable AI to control character movements, emotes, and tool usage. Module loads from GitHub."
+})
+
+local ActionsToggle = ModulesTab:CreateToggle({
+   Name = "Enable Actions Module",
+   CurrentValue = false,
+   Flag = "ActionsEnabled",
+   Callback = function(value)
+      Config.ActionsEnabled = value
+      
+      if value then
+         Rayfield:Notify({
+            Title = "Loading Module",
+            Content = "Downloading from GitHub...",
+            Duration = 2,
+            Image = 4483362458
+         })
+         
+         spawn(function()
+            wait(0.5)
+            
+            local actionsModule = LoadModule("Actions")
+            
+            if actionsModule then
+               LoadedModules.Actions = actionsModule
+               
+               print("========================================")
+               print("Actions Module Loaded!")
+               print("Version:", actionsModule.Version or "Unknown")
+               print("========================================")
+               
+               Rayfield:Notify({
+                  Title = "✓ Module Loaded!",
+                  Content = "Actions ready! Try the test buttons below.",
+                  Duration = 4,
+                  Image = 4483362458
+               })
+            else
+               Config.ActionsEnabled = false
+               ActionsToggle:Set(false)
+               
+               warn("Actions Module Load FAILED - Check console")
+               
+               Rayfield:Notify({
+                  Title = "❌ Load Failed",
+                  Content = "Could not load module. Check console (F9)",
+                  Duration = 5,
+                  Image = 4483362458
+               })
+            end
+         end)
+      else
+         UnloadModule("Actions")
+         Rayfield:Notify({
+            Title = "Module Unloaded",
+            Content = "Actions removed from memory",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local TestActionsSection = ModulesTab:CreateSection("Test Actions")
+
+local TestJumpButton = ModulesTab:CreateButton({
+   Name = "Test: Jump",
+   Callback = function()
+      if not Config.ActionsEnabled or not LoadedModules.Actions then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Actions module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local success = pcall(function()
+         LoadedModules.Actions.Jump()
+      end)
+      
+      if success then
+         Rayfield:Notify({
+            Title = "✓ Jump Triggered",
+            Content = "Check if character jumped",
+            Duration = 2,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "❌ Error",
+            Content = "Check console (F9)",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local TestSitButton = ModulesTab:CreateButton({
+   Name = "Test: Sit",
+   Callback = function()
+      if not Config.ActionsEnabled or not LoadedModules.Actions then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Actions module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local success, result = pcall(function()
+         return LoadedModules.Actions.Sit()
+      end)
+      
+      if success and result then
+         Rayfield:Notify({
+            Title = "✓ Sat Down!",
+            Content = "Character is sitting",
+            Duration = 2,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "❌ Failed",
+            Content = "Could not sit",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local TestDanceButton = ModulesTab:CreateButton({
+   Name = "Test: Dance",
+   Callback = function()
+      if not Config.ActionsEnabled or not LoadedModules.Actions then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Actions module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local success, result = pcall(function()
+         return LoadedModules.Actions.Dance()
+      end)
+      
+      if success and result then
+         Rayfield:Notify({
+            Title = "✓ Dancing!",
+            Content = "Character is dancing",
+            Duration = 2,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "❌ Failed",
+            Content = "Could not dance",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local StopDanceButton = ModulesTab:CreateButton({
+   Name = "Stop Dance",
+   Callback = function()
+      if not Config.ActionsEnabled or not LoadedModules.Actions then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Actions module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      LoadedModules.Actions.StopDance()
+      
+      Rayfield:Notify({
+         Title = "✓ Stopped",
+         Content = "Dance stopped",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+local SequenceTestSection = ModulesTab:CreateSection("Test Sequences")
+
+local TestSequence1 = ModulesTab:CreateButton({
+   Name = "Test: Jump 5 Times",
+   Callback = function()
+      if not Config.ActionsEnabled or not LoadedModules.Actions then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Actions module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local sequence = DetectSmartActions("jump 5 times")
+      ExecuteActionSequence(sequence, {})
+      
+      Rayfield:Notify({
+         Title = "✓ Sequence Started",
+         Content = "Jumping 5 times... (check console)",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local TestSequence2 = ModulesTab:CreateButton({
+   Name = "Test: Sit Then Jump 3 Times",
+   Callback = function()
+      if not Config.ActionsEnabled or not LoadedModules.Actions then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Actions module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local sequence = DetectSmartActions("sit then jump 3 times")
+      ExecuteActionSequence(sequence, {})
+      
+      Rayfield:Notify({
+         Title = "✓ Sequence Started",
+         Content = "Sit → Jump x3 (check console)",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local TestSequence3 = ModulesTab:CreateButton({
+   Name = "Test: Dance and Wave 10x",
+   Callback = function()
+      if not Config.ActionsEnabled or not LoadedModules.Actions then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Actions module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local sequence = DetectSmartActions("dance and wave 10 times")
+      ExecuteActionSequence(sequence, {})
+      
+      Rayfield:Notify({
+         Title = "✓ Sequence Started",
+         Content = "Dance → Wave x10 (check console)",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local ListToolsButton = ModulesTab:CreateButton({
+   Name = "List Tools in Backpack",
+   Callback = function()
+      if not Config.ActionsEnabled or not LoadedModules.Actions then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Actions module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local tools = LoadedModules.Actions.ListTools()
+      
+      if #tools == 0 then
+         Rayfield:Notify({
+            Title = "No Tools",
+            Content = "Backpack is empty",
+            Duration = 3,
+            Image = 4483362458
+         })
+      else
+         print("========== TOOLS IN BACKPACK ==========")
+         for i, tool in ipairs(tools) do
+            print(i .. ". " .. tool)
+         end
+         print("=======================================")
+         
+         Rayfield:Notify({
+            Title = "Tools Found",
+            Content = #tools .. " tools (check console F9)",
+            Duration = 4,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local ModuleStatusSection = ModulesTab:CreateSection("Module Status")
+
+local ModuleStatusLabel = ModulesTab:CreateLabel("Status: Not loaded")
+
+local RefreshStatusButton = ModulesTab:CreateButton({
+   Name = "Refresh Status",
+   Callback = function()
+      if LoadedModules.Actions then
+         local status = LoadedModules.Actions.GetStatus()
+         ModuleStatusLabel:Set(string.format("Loaded | Last: %s", status.lastAction or "None"))
+      else
+         ModuleStatusLabel:Set("Status: Not loaded")
+      end
+   end
+})
+
+-- ========================================
+-- PATHFINDING MODULE
+-- ========================================
+
+local PathfindingSection = ModulesTab:CreateSection("Pathfinding Module")
+
+local PathfindingInfo = ModulesTab:CreateParagraph({
+   Title = "AI-Powered Navigation",
+   Content = "Navigate anywhere with Basic mode, beat obbies with learning AI, or use Advanced parkour. Meta-AI chooses best mode automatically!"
+})
+
+local EnablePathfindingToggle = ModulesTab:CreateToggle({
+   Name = "Enable Pathfinding Module",
+   CurrentValue = false,
+   Flag = "PathfindingEnabled",
+   Callback = function(value)
+      Config.PathfindingEnabled = value
+      
+      if value then
+         spawn(function()
+            if not LoadedModules.Pathfinding then
+               Rayfield:Notify({
+                  Title = "Loading Module",
+                  Content = "Downloading pathfinding module from GitHub...",
+                  Duration = 3,
+                  Image = 4483362458
+               })
+               
+               local module = LoadModule("Pathfinding")
+               
+               if module then
+                  LoadedModules.Pathfinding = module
+                  Rayfield:Notify({
+                     Title = "✓ Module Loaded",
+                     Content = "Pathfinding module ready! v" .. module.Version,
+                     Duration = 4,
+                     Image = 4483362458
+                  })
+               else
+                  Config.PathfindingEnabled = false
+                  Rayfield:Notify({
+                     Title = "❌ Load Failed",
+                     Content = "Could not load pathfinding module",
+                     Duration = 4,
+                     Image = 4483362458
+                  })
+               end
+            end
+         end)
+      else
+         UnloadModule("Pathfinding")
+         Rayfield:Notify({
+            Title = "Module Unloaded",
+            Content = "Pathfinding module disabled",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local PathfindingTestSection = ModulesTab:CreateSection("Test Pathfinding")
+
+local TestBasicNav = ModulesTab:CreateButton({
+   Name = "Test: Navigate to Spawn",
+   Callback = function()
+      if not Config.PathfindingEnabled or not LoadedModules.Pathfinding then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Pathfinding module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      -- Better spawn detection
+      local spawnLocation = nil
+      
+      -- Method 1: Find SpawnLocation objects
+      for _, obj in ipairs(workspace:GetDescendants()) do
+         if obj:IsA("SpawnLocation") then
+            spawnLocation = obj
+            break
+         end
+      end
+      
+      -- Method 2: Find parts named "Spawn"
+      if not spawnLocation then
+         spawnLocation = workspace:FindFirstChild("Spawn", true) or 
+                        workspace:FindFirstChild("spawn", true) or
+                        workspace:FindFirstChild("Start", true) or
+                        workspace:FindFirstChild("start", true)
+      end
+      
+      -- Method 3: Use player's current spawn
+      if not spawnLocation and LocalPlayer.RespawnLocation then
+         spawnLocation = LocalPlayer.RespawnLocation
+      end
+      
+      if spawnLocation then
+         print("[Test] Found spawn:", spawnLocation:GetFullName())
+         
+         Rayfield:Notify({
+            Title = "Navigating",
+            Content = "Going to spawn: " .. spawnLocation.Name,
+            Duration = 3,
+            Image = 4483362458
+         })
+         
+         spawn(function()
+            LoadedModules.Pathfinding.Navigate(spawnLocation, "basic")
+         end)
+      else
+         Rayfield:Notify({
+            Title = "❌ No Spawn Found",
+            Content = "Could not find any spawn location",
+            Duration = 4,
+            Image = 4483362458
+         })
+         print("[Test] Spawn detection failed - no SpawnLocation, Spawn, or Start found")
+      end
+   end
+})
+
+local TestObbyMode = ModulesTab:CreateButton({
+   Name = "Test: Obby Mode (Auto-Find)",
+   Callback = function()
+      if not Config.PathfindingEnabled or not LoadedModules.Pathfinding then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Pathfinding module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      -- Better end/finish detection
+      local endKeywords = {
+         "Finish", "finish", "FINISH",
+         "End", "end", "END",
+         "Exit", "exit", "EXIT",
+         "Goal", "goal", "GOAL",
+         "Win", "win", "WIN",
+         "Complete", "complete",
+         "Final", "final"
+      }
+      
+      local target = nil
+      
+      -- Search for end parts
+      for _, keyword in ipairs(endKeywords) do
+         target = workspace:FindFirstChild(keyword, true)
+         if target then
+            print("[Test] Found obby end:", target:GetFullName())
+            break
+         end
+      end
+      
+      if target then
+         Rayfield:Notify({
+            Title = "Obby Mode Started",
+            Content = "Navigating to: " .. target.Name,
+            Duration = 3,
+            Image = 4483362458
+         })
+         
+         spawn(function()
+            LoadedModules.Pathfinding.Navigate(target, "obby")
+         end)
+      else
+         Rayfield:Notify({
+            Title = "❌ No End Found",
+            Content = "Could not find Finish/End/Exit/Goal part",
+            Duration = 4,
+            Image = 4483362458
+         })
+         print("[Test] Obby end detection failed - searched:", table.concat(endKeywords, ", "))
+      end
+   end
+})
+
+local ClickPathfindingEnabled = false
+local ClickPathfindingConnection = nil
+
+local ClickPathfindButton = ModulesTab:CreateToggle({
+   Name = "🖱️ Click-to-Pathfind Mode",
+   CurrentValue = false,
+   Flag = "ClickPathfinding",
+   Callback = function(value)
+      ClickPathfindingEnabled = value
+      
+      if value then
+         if not Config.PathfindingEnabled or not LoadedModules.Pathfinding then
+            Rayfield:Notify({
+               Title = "❌ Pathfinding Required",
+               Content = "Enable Pathfinding module first!",
+               Duration = 3,
+               Image = 4483362458
+            })
+            ClickPathfindingEnabled = false
+            return
+         end
+         
+         -- Enable click-to-pathfind
+         local mouse = LocalPlayer:GetMouse()
+         
+         ClickPathfindingConnection = mouse.Button1Down:Connect(function()
+            if not ClickPathfindingEnabled then return end
+            
+            local target = mouse.Target
+            if target then
+               local clickPos = mouse.Hit.Position
+               
+               print("========== CLICK PATHFINDING ==========")
+               print("Clicked on:", target.Name)
+               print("Position:", clickPos)
+               
+               Rayfield:Notify({
+                  Title = "Pathfinding",
+                  Content = string.format("Going to: %s", target.Name),
+                  Duration = 2,
+                  Image = 4483362458
+               })
+               
+               spawn(function()
+                  LoadedModules.Pathfinding.Navigate(clickPos, "auto")
+               end)
+               
+               print("=======================================")
+            end
+         end)
+         
+         Rayfield:Notify({
+            Title = "✓ Click Mode Enabled",
+            Content = "Click anywhere to pathfind there!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         
+         print("[Click Pathfinding] Enabled - click anywhere to navigate")
+      else
+         -- Disable click-to-pathfind
+         if ClickPathfindingConnection then
+            ClickPathfindingConnection:Disconnect()
+            ClickPathfindingConnection = nil
+         end
+         
+         Rayfield:Notify({
+            Title = "Click Mode Disabled",
+            Content = "Click-to-pathfind turned off",
+            Duration = 2,
+            Image = 4483362458
+         })
+         
+         print("[Click Pathfinding] Disabled")
+      end
+   end
+})
+
+local StopPathfindingButton = ModulesTab:CreateButton({
+   Name = "🛑 Stop Navigation",
+   Callback = function()
+      if not Config.PathfindingEnabled or not LoadedModules.Pathfinding then
+         return
+      end
+      
+      LoadedModules.Pathfinding.Stop()
+      
+      Rayfield:Notify({
+         Title = "Stopped",
+         Content = "Navigation cancelled",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+local PathfindingStatusLabel = ModulesTab:CreateLabel("Status: Not navigating")
+
+local GetStatusButton = ModulesTab:CreateButton({
+   Name = "Get Pathfinding Status",
+   Callback = function()
+      if not Config.PathfindingEnabled or not LoadedModules.Pathfinding then
+         PathfindingStatusLabel:Set("Status: Module not loaded")
+         return
+      end
+      
+      local status = LoadedModules.Pathfinding.GetStatus()
+      
+      if status.isNavigating then
+         PathfindingStatusLabel:Set(string.format("Status: %s mode | Attempt %d | Deaths: %d", 
+            status.currentMode, status.attempts, status.deaths))
+      else
+         PathfindingStatusLabel:Set("Status: Idle")
+      end
+      
+      print("========== PATHFINDING STATUS ==========")
+      print("Navigating:", status.isNavigating)
+      print("Mode:", status.currentMode)
+      print("Attempts:", status.attempts)
+      print("Deaths:", status.deaths)
+      print("Learned strategies:", #status.learningDatabase or 0)
+      print("Danger zones:", #status.dangerZones or 0)
+      print("=======================================")
+      
+      Rayfield:Notify({
+         Title = "Status Retrieved",
+         Content = "Check console (F9) for details",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local ClearLearningButton = ModulesTab:CreateButton({
+   Name = "Clear Learning Database",
+   Callback = function()
+      if not Config.PathfindingEnabled or not LoadedModules.Pathfinding then
+         return
+      end
+      
+      LoadedModules.Pathfinding.ClearLearning()
+      
+      Rayfield:Notify({
+         Title = "Learning Cleared",
+         Content = "All learned strategies erased",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local AutoGreetPathSection = ModulesTab:CreateSection("Auto-Greet with Pathfinding")
+
+local AutoGreetPathInfo = ModulesTab:CreateParagraph({
+   Title = "Proactive Social Bot",
+   Content = "When idle for 30s, bot will find nearest player, walk to them using pathfinding, and say hi! Requires pathfinding module."
+})
+
+local AutoGreetToggle = ModulesTab:CreateToggle({
+   Name = "Enable Auto-Greet",
+   CurrentValue = false,
+   Flag = "EnableAutoGreet",
+   Callback = function(value)
+      Config.EnableAutoGreet = value
+      
+      if value then
+         if not Config.PathfindingEnabled then
+            Rayfield:Notify({
+               Title = "⚠️ Pathfinding Required",
+               Content = "Enable Pathfinding module first for auto-greet!",
+               Duration = 4,
+               Image = 4483362458
+            })
+            Config.EnableAutoGreet = false
+            return
+         end
+         
+         AutoGreet.lastActivity = tick()
+         Rayfield:Notify({
+            Title = "✓ Auto-Greet Enabled",
+            Content = "Bot will greet idle players automatically",
+            Duration = 3,
+            Image = 4483362458
+         })
+         print("[AutoGreet] Enabled - will greet after 30s idle")
+      else
+         Rayfield:Notify({
+            Title = "Auto-Greet Disabled",
+            Content = "Bot will only respond to messages",
+            Duration = 2,
+            Image = 4483362458
+         })
+         print("[AutoGreet] Disabled")
+      end
+   end
+})
+
+local AutoGreetIntervalSlider = ModulesTab:CreateSlider({
+   Name = "Idle Time Before Greeting (seconds)",
+   Range = {10, 120},
+   Increment = 10,
+   CurrentValue = 30,
+   Flag = "AutoGreetInterval",
+   Callback = function(value)
+      Config.AutoGreetInterval = value
+      print("[AutoGreet] Interval set to", value, "seconds")
+      Rayfield:Notify({
+         Title = "Interval Updated",
+         Content = "Will greet after " .. value .. "s of inactivity",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+local AutoGreetDistanceSlider = ModulesTab:CreateSlider({
+   Name = "Max Search Distance (studs)",
+   Range = {20, 200},
+   Increment = 20,
+   CurrentValue = 100,
+   Flag = "AutoGreetMaxDistance",
+   Callback = function(value)
+      Config.AutoGreetMaxDistance = value
+      print("[AutoGreet] Max distance set to", value, "studs")
+      Rayfield:Notify({
+         Title = "Distance Updated",
+         Content = "Searching within " .. value .. " studs",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+-- ========================================
+-- TAB 6: MEMORY SYSTEM
+-- ========================================
+
+local MemoryTab = Window:CreateTab("Memory", 4483362458)
+
+local MemorySection = MemoryTab:CreateSection("Memory Statistics")
+
+local MemoryStatsLabel = MemoryTab:CreateLabel("Loading stats...")
+
+local function UpdateMemoryStats()
+   local stats = Memory:GetStats()
+   MemoryStatsLabel:Set(string.format("Users: %d | User Messages: %d | Global: %d", 
+      stats.uniqueUsers, stats.totalUserMessages, stats.globalMessages))
+end
+
+local RefreshStatsButton = MemoryTab:CreateButton({
+   Name = "Refresh Memory Stats",
+   Callback = function()
+      UpdateMemoryStats()
+      Rayfield:Notify({
+         Title = "Stats Updated",
+         Content = "Memory statistics refreshed",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+-- Auto-update stats every 10 seconds
+spawn(function()
+   while true do
+      wait(10)
+      UpdateMemoryStats()
+   end
+end)
+
+local ViewSection = MemoryTab:CreateSection("View Memories")
+
+local SelectedUser = ""
+
+local UserInput = MemoryTab:CreateInput({
+   Name = "Username",
+   PlaceholderText = "Enter username to view their memory",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      SelectedUser = value
+   end
+})
+
+local ViewUserMemoryButton = MemoryTab:CreateButton({
+   Name = "View User Memory",
+   Callback = function()
+      if SelectedUser == "" then
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "Enter a username first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local history = Memory:GetUserHistory(SelectedUser, 10)
+      
+      if history == "" then
+         Rayfield:Notify({
+            Title = "No Memory",
+            Content = "No conversation history with " .. SelectedUser,
+            Duration = 3,
+            Image = 4483362458
+         })
+         print("No memory found for:", SelectedUser)
+      else
+         local output = "========== MEMORY: " .. SelectedUser .. " ==========\n" .. history .. "========================================="
+         print(output)
+         
+         if setclipboard then
+            setclipboard(output)
+            Rayfield:Notify({
+               Title = "Memory Copied",
+               Content = SelectedUser .. "'s conversation copied!",
+               Duration = 3,
+               Image = 4483362458
+            })
+         else
+            Rayfield:Notify({
+               Title = "Memory Displayed",
+               Content = "Check console (F9) for conversation",
+               Duration = 3,
+               Image = 4483362458
+            })
+         end
+      end
+   end
+})
+
+local ViewGlobalMemoryButton = MemoryTab:CreateButton({
+   Name = "View Global Memory",
+   Callback = function()
+      local context = Memory:GetGlobalContext()
+      local output = "========== GLOBAL MEMORY ==========\n" .. context .. "===================================="
+      
+      print(output)
+      
+      if setclipboard then
+         setclipboard(output)
+         Rayfield:Notify({
+            Title = "Global Memory Copied",
+            Content = "All recent conversations copied!",
+            Duration = 3,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Global Memory",
+            Content = "Check console (F9) for all conversations",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local SearchSection = MemoryTab:CreateSection("Search Memory")
+
+local SearchQuery = ""
+
+local SearchInput = MemoryTab:CreateInput({
+   Name = "Search Query",
+   PlaceholderText = "Search all conversations...",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      SearchQuery = value
+   end
+})
+
+local SearchMemoryButton = MemoryTab:CreateButton({
+   Name = "Search Global Memory",
+   Callback = function()
+      if SearchQuery == "" then
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "Enter a search query first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local results = Memory:SearchGlobalMemory(SearchQuery, 10)
+      
+      if #results == 0 then
+         Rayfield:Notify({
+            Title = "No Results",
+            Content = "'" .. SearchQuery .. "' not found in memory",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      local output = "========== SEARCH RESULTS: '" .. SearchQuery .. "' ==========\n"
+      
+      for i, entry in ipairs(results) do
+         output = output .. string.format("%d. %s: %s\n", i, 
+            entry.isAI and "AI" or entry.username, 
+            entry.message)
+      end
+      
+      output = output .. "========================================="
+      
+      print(output)
+      
+      if setclipboard then
+         setclipboard(output)
+         Rayfield:Notify({
+            Title = "Results Found",
+            Content = #results .. " results copied to clipboard",
+            Duration = 3,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Results Found",
+            Content = #results .. " results (check F9 console)",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local ManageSection = MemoryTab:CreateSection("Manage Memory")
+
+local ClearUserMemoryButton = MemoryTab:CreateButton({
+   Name = "Clear User Memory",
+   Callback = function()
+      if SelectedUser == "" then
+         Rayfield:Notify({
+            Title = "Error",
+            Content = "Enter a username first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+      
+      if Memory:ClearUserMemory(SelectedUser) then
+         Rayfield:Notify({
+            Title = "Memory Cleared",
+            Content = "Cleared conversation with " .. SelectedUser,
+            Duration = 3,
+            Image = 4483362458
+         })
+         UpdateMemoryStats()
+      else
+         Rayfield:Notify({
+            Title = "Not Found",
+            Content = "No memory exists for " .. SelectedUser,
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local ClearAllMemoryButton = MemoryTab:CreateButton({
+   Name = "Clear ALL Memory (Caution!)",
+   Callback = function()
+      Memory:ClearAllMemory()
+      
+      Rayfield:Notify({
+         Title = "All Memory Cleared",
+         Content = "All conversation history deleted",
+         Duration = 4,
+         Image = 4483362458
+      })
+      
+      UpdateMemoryStats()
+   end
+})
+
+local SettingsSection = MemoryTab:CreateSection("Memory Settings")
+
+local UserMemorySlider = MemoryTab:CreateSlider({
+   Name = "Messages Per User",
+   Range = {5, 20},
+   Increment = 1,
+   CurrentValue = 10,
+   Flag = "MaxUserMessages",
+   Callback = function(value)
+      Memory.MaxUserMessages = value
+      Rayfield:Notify({
+         Title = "Setting Updated",
+         Content = "Keeping last " .. value .. " messages per user",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+local GlobalMemorySlider = MemoryTab:CreateSlider({
+   Name = "Global Memory Size",
+   Range = {20, 100},
+   Increment = 10,
+   CurrentValue = 50,
+   Flag = "MaxGlobalMessages",
+   Callback = function(value)
+      Memory.MaxGlobalMessages = value
+      Rayfield:Notify({
+         Title = "Setting Updated",
+         Content = "Global memory: " .. value .. " messages max",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+-- ========================================
+-- TAB 7: SETTINGS & INFO
+-- ========================================
+
+local SettingsTab = Window:CreateTab("Settings", 4483362458)
+
+local InfoSection = SettingsTab:CreateSection("Information")
+
+local InfoParagraph = SettingsTab:CreateParagraph({
+   Title = "How to Use",
+   Content = "1. Set your chatbot's name in API Setup\n2. Select a free AI model (built-in keys included!)\n3. OR use your own API key from openrouter.ai\n4. Choose or create a personality\n5. Enable the chatbot in the Chatbot tab\n6. Test in the Debug tab anytime"
+})
+
+local ControlsParagraph = SettingsTab:CreateParagraph({
+   Title = "Controls",
+   Content = "RightShift: Toggle UI visibility\nChatbot: Auto-responds to nearby players\nDebug: Test AI responses instantly\nDistance: Adjust response range"
+})
+
+local FeaturesSection = SettingsTab:CreateSection("Features")
+
+local FeaturesLabel1 = SettingsTab:CreateLabel("✓ Multiple AI Models")
+local FeaturesLabel2 = SettingsTab:CreateLabel("✓ Custom Personalities")
+local FeaturesLabel3 = SettingsTab:CreateLabel("✓ Per-User Memory System")
+local FeaturesLabel4 = SettingsTab:CreateLabel("✓ Modular Actions (GitHub)")
+local FeaturesLabel5 = SettingsTab:CreateLabel("✓ Distance-Based Responses")
+local FeaturesLabel6 = SettingsTab:CreateLabel("✓ Real-Time Testing")
+local FeaturesLabel7 = SettingsTab:CreateLabel("✓ Free OpenRouter API")
+
+local CreditsSection = SettingsTab:CreateSection("Credits")
+
+local CreditsLabel1 = SettingsTab:CreateLabel("Script: SS Hub")
+local CreditsLabel2 = SettingsTab:CreateLabel("UI Library: Rayfield by Sirius")
+local CreditsLabel3 = SettingsTab:CreateLabel("API: OpenRouter")
+local CreditsLabel4 = SettingsTab:CreateLabel("Modules: GitHub (Essencor)")
+local CreditsLabel5 = SettingsTab:CreateLabel("Version: 2.2 - Modular Actions")
+
+-- ========================================
+-- INITIALIZATION COMPLETE
+-- ========================================
+
+-- Initialize memory stats display
+UpdateMemoryStats()
+
+Rayfield:Notify({
+   Title = "SS Hub Loaded",
+   Content = "v2.2 - Modules tab active! Enable Actions module.",
+   Duration = 5,
+   Image = 4483362458
+})
+
+print("SS Hub - AI Chatbot Loaded Successfully")
+print("Version: 2.2 - Modular Actions Edition")
+print("Powered by OpenRouter API")
+print("Modules: github.com/Essencor/roblox-ai-modules")
