@@ -44,28 +44,37 @@ end
 -- Local Player
 local LocalPlayer = Players.LocalPlayer
 
--- Load Rayfield UI Library
-print("[AI Chatbot] Loading Rayfield UI...")
-local success, Rayfield = pcall(function()
-   return loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
-end)
+-- Load UI Library (Wave-compatible)
+print("[AI Chatbot] Loading UI Library...")
 
-if not success or not Rayfield then
-   error("[AI Chatbot] Failed to load Rayfield UI library! Error: " .. tostring(Rayfield))
-   return
+-- Try Linoria (works better with Wave)
+local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua'))()
+local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/ThemeManager.lua'))()
+
+-- Create Window
+local Window = Library:CreateWindow({
+    Title = 'SS Hub - AI Chatbot',
+    Center = true,
+    AutoShow = true,
+})
+
+print("[AI Chatbot] UI loaded successfully!")
+
+-- Create Tabs
+local MainTab = Window:AddTab('Chatbot')
+local APITab = Window:AddTab('API Setup')
+local PromptsTab = Window:AddTab('Prompts')
+local DebugTab = Window:AddTab('Debug')
+local ModulesTab = Window:AddTab('Modules')
+local MemoryTab = Window:AddTab('Memory')
+local SettingsTab = Window:AddTab('Settings')
+
+-- Helper function to create notifications
+local function Notify(title, content, duration)
+    Library:Notify(content, duration or 3)
 end
 
-print("[AI Chatbot] Rayfield loaded successfully!")
-
--- Create Main Window
-local Window = Rayfield:CreateWindow({
-   Name = "SS Hub - AI Chatbot",
-   LoadingTitle = "SS Hub AI Loading",
-   LoadingSubtitle = "Powered by OpenRouter API",
-   ConfigurationSaving = {
-      Enabled = false
-   },
-   Discord = {
+-- Configuration Variables
       Enabled = false
    },
    KeySystem = false
