@@ -59,6 +59,9 @@ end
 
 print("[AI Chatbot] Rayfield UI loaded successfully!")
 
+-- Disable KeySystem explicitly
+getgenv().RayfieldKeySystem = false
+
 -- Create Main Window
 local Window = Rayfield:CreateWindow({
    Name = "SS Hub - AI Chatbot",
@@ -70,7 +73,15 @@ local Window = Rayfield:CreateWindow({
    Discord = {
       Enabled = false
    },
-   KeySystem = false
+   KeySystem = false,
+   Key = {},
+   KeySettings = {
+      Title = "Disabled",
+      Subtitle = "No key required",
+      Note = "Key system disabled",
+      SaveKey = false,
+      Key = {"DISABLED"}
+   }
 })
 
 -- Create Tabs
