@@ -44,41 +44,43 @@ end
 -- Local Player
 local LocalPlayer = Players.LocalPlayer
 
--- Load UI Library (Wave-compatible)
-print("[AI Chatbot] Loading UI Library...")
+-- Load Rayfield UI Library
+print("[AI Chatbot] Loading Rayfield UI...")
 
--- Try Linoria (works better with Wave)
-local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua'))()
-local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/addons/ThemeManager.lua'))()
+local Rayfield
+local success, err = pcall(function()
+   Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+end)
 
--- Create Window
-local Window = Library:CreateWindow({
-    Title = 'SS Hub - AI Chatbot',
-    Center = true,
-    AutoShow = true,
-})
-
-print("[AI Chatbot] UI loaded successfully!")
-
--- Create Tabs
-local MainTab = Window:AddTab('Chatbot')
-local APITab = Window:AddTab('API Setup')
-local PromptsTab = Window:AddTab('Prompts')
-local DebugTab = Window:AddTab('Debug')
-local ModulesTab = Window:AddTab('Modules')
-local MemoryTab = Window:AddTab('Memory')
-local SettingsTab = Window:AddTab('Settings')
-
--- Helper function to create notifications
-local function Notify(title, content, duration)
-    Library:Notify(content, duration or 3)
+if not success or not Rayfield then
+   error("[AI Chatbot] Failed to load Rayfield UI! Error: " .. tostring(err))
+   return
 end
 
--- Configuration Variables
+print("[AI Chatbot] Rayfield UI loaded successfully!")
+
+-- Create Main Window
+local Window = Rayfield:CreateWindow({
+   Name = "SS Hub - AI Chatbot",
+   LoadingTitle = "SS Hub AI Loading",
+   LoadingSubtitle = "Powered by OpenRouter API",
+   ConfigurationSaving = {
+      Enabled = false
+   },
+   Discord = {
       Enabled = false
    },
    KeySystem = false
 })
+
+-- Create Tabs
+local ChatTab = Window:CreateTab("Chatbot", 4483362458)
+local APITab = Window:CreateTab("API Setup", 4483362458)
+local PromptsTab = Window:CreateTab("Prompts", 4483362458)
+local DebugTab = Window:CreateTab("Debug", 4483362458)
+local ModulesTab = Window:CreateTab("Modules", 4483362458)
+local MemoryTab = Window:CreateTab("Memory", 4483362458)
+local SettingsTab = Window:CreateTab("Settings", 4483362458)
 
 -- Configuration Variables
 local Config = {
