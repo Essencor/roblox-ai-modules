@@ -1,8 +1,4 @@
--- AI Chatbot Hub for Roblox
--- Powered by OpenRouter API
--- UI Library: Rayfield Interface Suite
 
--- Services
 local HttpService = game:GetService("HttpService")
 local TextChatService = game:GetService("TextChatService")
 local Players = game:GetService("Players")
