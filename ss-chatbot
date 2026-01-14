@@ -1,4 +1,8 @@
+-- AI Chatbot Hub for Roblox
+-- Powered by OpenRouter API
+-- UI Library: Rayfield Interface Suite
 
+-- Services
 local HttpService = game:GetService("HttpService")
 local TextChatService = game:GetService("TextChatService")
 local Players = game:GetService("Players")
@@ -55,29 +59,11 @@ end
 
 print("[AI Chatbot] Rayfield UI loaded successfully!")
 
--- Disable KeySystem explicitly
-getgenv().RayfieldKeySystem = false
-
--- Create Main Window
+-- Create Main Window (Minimal config to avoid KeySystem)
 local Window = Rayfield:CreateWindow({
    Name = "SS Hub - AI Chatbot",
-   LoadingTitle = "SS Hub AI Loading",
-   LoadingSubtitle = "Powered by OpenRouter API",
-   ConfigurationSaving = {
-      Enabled = false
-   },
-   Discord = {
-      Enabled = false
-   },
-   KeySystem = false,
-   Key = {},
-   KeySettings = {
-      Title = "Disabled",
-      Subtitle = "No key required",
-      Note = "Key system disabled",
-      SaveKey = false,
-      Key = {"DISABLED"}
-   }
+   LoadingTitle = "AI Chatbot",
+   LoadingSubtitle = "by SS"
 })
 
 -- Create Tabs
