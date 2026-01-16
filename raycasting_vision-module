@@ -1,8 +1,9 @@
 --[[
-    RAYCASTING VISION MODULE
+    RAYCASTING VISION MODULE V1.1 (Integrated Edition)
     Comprehensive scanning and obstacle detection system
     
-    Features:
+    INTEGRATED FEATURES:
+    - Pathfinding Data Provider: Optimized cliff distance reporting.
     - Forward obstacle detection (multi-ray)
     - 360° circular scanning
     - Ground detection and cliff prevention
@@ -475,31 +476,24 @@ function RaycastingVision.CheckGroundAhead(distance, checkDistance)
     return RaycastingVision.CheckGround(forwardPos, checkDistance)
 end
 
-function RaycastingVision.DetectCliff(distance)
-    distance = distance or Config.CliffDetectionDistance
-    
-    local hasGround, groundInfo = RaycastingVision.CheckGroundAhead(distance, 20)
-    
-    if not hasGround then
-        Stats.cliffsDetected = Stats.cliffsDetected + 1
-        Log("Cliff detected ahead! (distance: " .. distance .. ")", "WARN")
-        return true, {
-            distance = distance,
-            type = "void"
-        }
-    end
-    
+function RaycastingVision.DetectCliff(maxDistance)
+    local checkDistance = maxDistance or Config.CliffDetectionDistance
     local rootPart = GetRootPart()
-    if groundInfo and rootPart then
+    if not rootPart then return false, nil end
+
+    -- Enhanced: Scan step-by-step to find exact distance to edge
+    for d = 2, checkDistance, 2 do
+        local hasGround, groundInfo = RaycastingVision.CheckGroundAhead(d, 20)
+        
+        if not hasGround then
+            Stats.cliffsDetected = Stats.cliffsDetected + 1
+            return true, { distance = d, type = "void" }
+        end
+        
         local heightDiff = rootPart.Position.Y - groundInfo.position.Y
         if heightDiff > Config.CliffMinHeight then
             Stats.cliffsDetected = Stats.cliffsDetected + 1
-            Log("Cliff detected! Height drop: " .. math.floor(heightDiff) .. " studs", "WARN")
-            return true, {
-                distance = distance,
-                heightDrop = heightDiff,
-                type = "drop"
-            }
+            return true, { distance = d, heightDrop = heightDiff, type = "drop" }
         end
     end
     
@@ -844,7 +838,7 @@ end
 -- INITIALIZATION
 -- ===================================
 
-Log("Raycasting Vision Module loaded successfully!")
+Log("Raycasting Vision Module V1.1 Integrated loaded successfully!")
 Log("Features: Forward Scan, 360° Scan, Ground Detection, LOS, Terrain Profile, Hazard Detection")
 Log("Performance: Caching enabled, " .. Config.MaxRaysPerFrame .. " max rays/frame")
 
