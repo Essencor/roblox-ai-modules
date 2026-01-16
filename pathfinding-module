@@ -1,54 +1,404 @@
--- SUPER SIMPLE PATHFINDING MODULE
--- No fancy features, just basic navigation
+--[[
+    ADVANCED PATHFINDING MODULE V2
+    Complete rewrite - 100% compatible
+    
+    Features:
+    - Smart pathfinding with obstacle detection
+    - Jump detection and execution  
+    - Death zone learning (remembers deadly spots)
+    - Stuck detection with 4 recovery methods
+    - Waypoint optimization
+    - Path visualization
+    - Statistics tracking
+    - Multiple profiles (Fast, Precise, Safe, Obby)
+]]
 
+local PathfindingModule = {}
+
+-- Services
 local PathfindingService = game:GetService("PathfindingService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
-local PathfindingModule = {}
+-- Configuration
+local Config = {
+    WaypointSpacing = 4,
+    MaxPathDistance = 500,
+    PathTimeout = 30,
+    JumpCheckDistance = 8,
+    JumpHeight = 7,
+    StuckTimeout = 3,
+    StuckDistance = 2,
+    MaxStuckAttempts = 3,
+    DeathRadius = 10,
+    MaxDeathZones = 50,
+    WaypointReachedDistance = 4,
+    ShowPath = false,
+    ShowWaypoints = true,
+    PathColor = Color3.new(0, 1, 0),
+    WaypointColor = Color3.new(1, 1, 0),
+    UseSmartPathing = true,
+    UseJumpOptimization = true,
+    UseStuckRecovery = true
+}
 
-local isNavigating = false
+-- State
+local State = {
+    isNavigating = false,
+    currentPath = nil,
+    currentWaypointIndex = 0,
+    targetPosition = nil,
+    startTime = 0,
+    lastPosition = nil,
+    lastMoveTime = 0,
+    stuckCount = 0,
+    visualizations = {},
+    deathZones = {}
+}
 
-function PathfindingModule.Navigate(target, mode)
-    print("[Pathfinding] Starting navigation...")
-    
-    local character = LocalPlayer.Character
-    if not character then
-        warn("[Pathfinding] No character found")
-        return false
-    end
-    
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
-    
-    if not humanoid or not rootPart then
-        warn("[Pathfinding] Missing humanoid or root part")
-        return false
-    end
-    
-    -- Get target position
-    local targetPos
-    if typeof(target) == "Vector3" then
-        targetPos = target
-    elseif typeof(target) == "Instance" then
-        if target:IsA("BasePart") then
-            targetPos = target.Position
-        elseif target:IsA("Model") then
-            local primaryPart = target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart")
+-- Statistics
+local Stats = {
+    totalPaths = 0,
+    successfulPaths = 0,
+    failedPaths = 0,
+    jumpsExecuted = 0,
+    stucksRecovered = 0,
+    deathsLearned = 0,
+    averagePathTime = 0,
+    totalPathTime = 0
+}
+
+-- ===================================
+-- UTILITY FUNCTIONS
+-- ===================================
+
+local function Log(message, level)
+    level = level or "INFO"
+    print("[Pathfinding:" .. level .. "] " .. tostring(message))
+end
+
+local function GetCharacter()
+    return LocalPlayer.Character
+end
+
+local function GetHumanoid()
+    local character = GetCharacter()
+    return character and character:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetRootPart()
+    local character = GetCharacter()
+    return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetDistance(pos1, pos2)
+    return (pos1 - pos2).Magnitude
+end
+
+local function GetPosition(obj)
+    if typeof(obj) == "Vector3" then
+        return obj
+    elseif typeof(obj) == "Instance" then
+        if obj:IsA("Model") then
+            local primaryPart = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
             if primaryPart then
-                targetPos = primaryPart.Position
+                return primaryPart.Position
             end
+        elseif obj:IsA("BasePart") then
+            return obj.Position
+        end
+    end
+    return nil
+end
+
+-- ===================================
+-- VISUALIZATION
+-- ===================================
+
+local function ClearVisualizations()
+    for _, visual in ipairs(State.visualizations) do
+        if visual and visual.Parent then
+            visual:Destroy()
+        end
+    end
+    State.visualizations = {}
+end
+
+local function CreateWaypointMarker(position, color)
+    if not Config.ShowWaypoints then return end
+    
+    local part = Instance.new("Part")
+    part.Size = Vector3.new(1, 1, 1)
+    part.Position = position
+    part.Anchored = true
+    part.CanCollide = false
+    part.Color = color or Config.WaypointColor
+    part.Material = Enum.Material.Neon
+    part.Transparency = 0.5
+    part.Parent = workspace
+    
+    table.insert(State.visualizations, part)
+    
+    task.delay(5, function()
+        if part and part.Parent then
+            part:Destroy()
+        end
+    end)
+end
+
+local function CreatePathLine(startPos, endPos)
+    if not Config.ShowPath then return end
+    
+    local distance = GetDistance(startPos, endPos)
+    local midpoint = (startPos + endPos) / 2
+    
+    local beam = Instance.new("Part")
+    beam.Size = Vector3.new(0.2, 0.2, distance)
+    beam.CFrame = CFrame.new(midpoint, endPos)
+    beam.Anchored = true
+    beam.CanCollide = false
+    beam.Color = Config.PathColor
+    beam.Material = Enum.Material.Neon
+    beam.Transparency = 0.7
+    beam.Parent = workspace
+    
+    table.insert(State.visualizations, beam)
+    
+    task.delay(3, function()
+        if beam and beam.Parent then
+            beam:Destroy()
+        end
+    end)
+end
+
+-- ===================================
+-- DEATH LEARNING SYSTEM
+-- ===================================
+
+local function AddDeathZone(position)
+    -- Check if death zone already exists nearby
+    for _, zone in ipairs(State.deathZones) do
+        if GetDistance(zone.position, position) < Config.DeathRadius then
+            zone.deaths = zone.deaths + 1
+            zone.lastDeath = tick()
+            Log("Death zone reinforced at " .. tostring(position) .. " - " .. zone.deaths .. " deaths", "WARN")
+            return
         end
     end
     
-    if not targetPos then
-        warn("[Pathfinding] Could not get target position")
-        return false
+    -- Add new death zone
+    table.insert(State.deathZones, {
+        position = position,
+        deaths = 1,
+        radius = Config.DeathRadius,
+        created = tick(),
+        lastDeath = tick()
+    })
+    
+    Stats.deathsLearned = Stats.deathsLearned + 1
+    Log("New death zone learned at " .. tostring(position), "WARN")
+    
+    -- Limit death zones
+    if #State.deathZones > Config.MaxDeathZones then
+        table.remove(State.deathZones, 1)
+    end
+end
+
+local function IsInDeathZone(position)
+    for _, zone in ipairs(State.deathZones) do
+        if GetDistance(zone.position, position) < zone.radius then
+            return true
+        end
+    end
+    return false
+end
+
+local function MonitorDeath()
+    task.spawn(function()
+        local character = GetCharacter()
+        if not character then
+            character = LocalPlayer.CharacterAdded:Wait()
+        end
+        
+        local humanoid = GetHumanoid()
+        if not humanoid then
+            return
+        end
+        
+        humanoid.Died:Connect(function()
+            local rootPart = GetRootPart()
+            if rootPart and State.isNavigating then
+                AddDeathZone(rootPart.Position)
+                Log("Death detected during navigation - learning from mistake", "ERROR")
+            end
+        end)
+    end)
+end
+
+-- ===================================
+-- OBSTACLE DETECTION
+-- ===================================
+
+local function RaycastCheck(origin, direction, distance)
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    raycastParams.FilterDescendantsInstances = {GetCharacter()}
+    
+    local result = workspace:Raycast(origin, direction * distance, raycastParams)
+    return result
+end
+
+local function CheckGroundBelow(position, distance)
+    distance = distance or 10
+    local result = RaycastCheck(position, Vector3.new(0, -1, 0), distance)
+    return result ~= nil, result
+end
+
+local function CheckJumpRequired(currentPos, nextPos)
+    local heightDiff = nextPos.Y - currentPos.Y
+    
+    if heightDiff > Config.JumpHeight then
+        return true, "high_jump"
     end
     
-    print("[Pathfinding] Target position:", targetPos)
+    local midpoint = (currentPos + nextPos) / 2
+    local hasGround = CheckGroundBelow(midpoint, 20)
     
-    isNavigating = true
+    if not hasGround then
+        local distance = GetDistance(
+            Vector3.new(currentPos.X, 0, currentPos.Z),
+            Vector3.new(nextPos.X, 0, nextPos.Z)
+        )
+        
+        if distance > 3 then
+            return true, "gap_jump"
+        end
+    end
+    
+    return false, nil
+end
+
+-- ===================================
+-- STUCK DETECTION & RECOVERY
+-- ===================================
+
+local function IsStuck()
+    local rootPart = GetRootPart()
+    if not rootPart then return false end
+    
+    local currentPos = rootPart.Position
+    local timeSinceMove = tick() - State.lastMoveTime
+    
+    if State.lastPosition then
+        local distanceMoved = GetDistance(currentPos, State.lastPosition)
+        
+        if distanceMoved < Config.StuckDistance and timeSinceMove > Config.StuckTimeout then
+            return true
+        end
+        
+        if distanceMoved > Config.StuckDistance then
+            State.lastMoveTime = tick()
+        end
+    end
+    
+    State.lastPosition = currentPos
+    return false
+end
+
+local function RecoverFromStuck()
+    Log("Attempting stuck recovery...", "WARN")
+    Stats.stucksRecovered = Stats.stucksRecovered + 1
+    State.stuckCount = State.stuckCount + 1
+    
+    local rootPart = GetRootPart()
+    local humanoid = GetHumanoid()
+    if not rootPart or not humanoid then return false end
+    
+    local recoveryMethod = ((State.stuckCount - 1) % 4) + 1
+    
+    if recoveryMethod == 1 then
+        Log("Recovery: Jump")
+        humanoid.Jump = true
+        task.wait(0.5)
+    elseif recoveryMethod == 2 then
+        Log("Recovery: Move backwards")
+        local backwardPos = rootPart.Position - rootPart.CFrame.LookVector * 5
+        humanoid:MoveTo(backwardPos)
+        task.wait(1)
+    elseif recoveryMethod == 3 then
+        Log("Recovery: Move to side")
+        local sidePos = rootPart.Position + rootPart.CFrame.RightVector * 5
+        humanoid:MoveTo(sidePos)
+        task.wait(1)
+    else
+        Log("Recovery: Teleport up")
+        rootPart.CFrame = rootPart.CFrame + Vector3.new(0, 3, 0)
+        task.wait(0.5)
+    end
+    
+    State.lastMoveTime = tick()
+    State.lastPosition = rootPart.Position
+    
+    return true
+end
+
+-- ===================================
+-- JUMP EXECUTION
+-- ===================================
+
+local function ExecuteJump(jumpType)
+    local humanoid = GetHumanoid()
+    local rootPart = GetRootPart()
+    if not humanoid or not rootPart then return false end
+    
+    Log("Executing jump: " .. (jumpType or "normal"))
+    Stats.jumpsExecuted = Stats.jumpsExecuted + 1
+    
+    if jumpType == "high_jump" then
+        for i = 1, 3 do
+            humanoid.Jump = true
+            task.wait(0.1)
+        end
+        
+        local bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.MaxForce = Vector3.new(0, 8000, 0)
+        bodyVelocity.Velocity = Vector3.new(0, 60, 0)
+        bodyVelocity.Parent = rootPart
+        task.wait(0.3)
+        bodyVelocity:Destroy()
+        
+    elseif jumpType == "gap_jump" then
+        humanoid.Jump = true
+        local direction = rootPart.CFrame.LookVector
+        
+        local bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.MaxForce = Vector3.new(4000, 4000, 4000)
+        bodyVelocity.Velocity = (direction * 30) + Vector3.new(0, 40, 0)
+        bodyVelocity.Parent = rootPart
+        task.wait(0.4)
+        bodyVelocity:Destroy()
+    else
+        humanoid.Jump = true
+        task.wait(0.2)
+    end
+    
+    return true
+end
+
+-- ===================================
+-- PATH COMPUTATION
+-- ===================================
+
+local function ComputePath(startPos, endPos, useDeathAvoidance)
+    if useDeathAvoidance == nil then
+        useDeathAvoidance = true
+    end
+    
+    -- Check if end position is in a death zone
+    if useDeathAvoidance and IsInDeathZone(endPos) then
+        Log("Target is in death zone", "ERROR")
+        return nil
+    end
     
     -- Create path
     local path = PathfindingService:CreatePath({
@@ -56,103 +406,442 @@ function PathfindingModule.Navigate(target, mode)
         AgentHeight = 5,
         AgentCanJump = true,
         AgentCanClimb = false,
-        WaypointSpacing = 4
+        WaypointSpacing = Config.WaypointSpacing,
+        Costs = {
+            Water = 20,
+            Danger = 999999
+        }
     })
     
     -- Compute path
     local success, errorMsg = pcall(function()
-        path:ComputeAsync(rootPart.Position, targetPos)
+        path:ComputeAsync(startPos, endPos)
     end)
     
     if not success then
-        warn("[Pathfinding] Path computation failed:", errorMsg)
-        isNavigating = false
-        return false
+        Log("Path computation failed: " .. tostring(errorMsg), "ERROR")
+        return nil
     end
     
     if path.Status ~= Enum.PathStatus.Success then
-        warn("[Pathfinding] Path status:", path.Status)
-        isNavigating = false
-        return false
+        Log("Path status: " .. tostring(path.Status), "WARN")
+        return nil
     end
     
     local waypoints = path:GetWaypoints()
     
-    if not waypoints or #waypoints == 0 then
-        warn("[Pathfinding] No waypoints generated")
-        isNavigating = false
-        return false
+    if #waypoints == 0 then
+        Log("No waypoints generated", "ERROR")
+        return nil
     end
     
-    print("[Pathfinding] Following", #waypoints, "waypoints")
+    -- Filter waypoints through death zones
+    if useDeathAvoidance and Config.UseSmartPathing then
+        local filteredWaypoints = {}
+        for i, waypoint in ipairs(waypoints) do
+            local inDeathZone = IsInDeathZone(waypoint.Position)
+            if not inDeathZone then
+                table.insert(filteredWaypoints, waypoint)
+            else
+                Log("Waypoint " .. i .. " filtered (death zone)", "WARN")
+            end
+        end
+        
+        if #filteredWaypoints < 2 then
+            Log("Too many waypoints in death zones", "ERROR")
+            return nil
+        end
+        
+        waypoints = filteredWaypoints
+    end
     
-    -- Follow waypoints
-    for i, waypoint in ipairs(waypoints) do
-        if not isNavigating then
-            print("[Pathfinding] Navigation cancelled")
+    Log("Path computed: " .. #waypoints .. " waypoints, distance: " .. math.floor(GetDistance(startPos, endPos)))
+    
+    return {
+        path = path,
+        waypoints = waypoints,
+        distance = GetDistance(startPos, endPos)
+    }
+end
+
+-- ===================================
+-- WAYPOINT OPTIMIZATION
+-- ===================================
+
+local function OptimizeWaypoints(waypoints)
+    if not Config.UseSmartPathing or #waypoints < 3 then
+        return waypoints
+    end
+    
+    Log("Optimizing " .. #waypoints .. " waypoints...")
+    
+    local optimized = {waypoints[1]}
+    local minDistance = 3
+    
+    for i = 2, #waypoints - 1 do
+        local prevPos = optimized[#optimized].Position
+        local currentPos = waypoints[i].Position
+        local distance = GetDistance(prevPos, currentPos)
+        
+        -- Keep waypoint if far enough from previous
+        if distance >= minDistance then
+            table.insert(optimized, waypoints[i])
+        end
+    end
+    
+    -- Always keep last waypoint
+    table.insert(optimized, waypoints[#waypoints])
+    
+    Log("Waypoints optimized: " .. #waypoints .. " -> " .. #optimized)
+    
+    return optimized
+end
+
+-- ===================================
+-- PATH FOLLOWING
+-- ===================================
+
+local function MoveToWaypoint(waypoint)
+    local humanoid = GetHumanoid()
+    local rootPart = GetRootPart()
+    if not humanoid or not rootPart then return false end
+    
+    local waypointPos = waypoint.Position
+    
+    CreateWaypointMarker(waypointPos, Config.WaypointColor)
+    
+    if waypoint.Action == Enum.PathWaypointAction.Jump then
+        Log("Jump waypoint detected")
+        ExecuteJump("normal")
+        task.wait(0.3)
+    end
+    
+    if Config.UseJumpOptimization then
+        local needsJump, jumpType = CheckJumpRequired(rootPart.Position, waypointPos)
+        if needsJump then
+            ExecuteJump(jumpType)
+            task.wait(0.5)
+        end
+    end
+    
+    humanoid:MoveTo(waypointPos)
+    
+    local startTime = tick()
+    local timeout = 10
+    local reached = false
+    
+    while tick() - startTime < timeout do
+        if not State.isNavigating then
             return false
         end
         
-        if waypoint.Action == Enum.PathWaypointAction.Jump then
-            humanoid.Jump = true
+        local currentPos = rootPart.Position
+        local distance = GetDistance(currentPos, waypointPos)
+        
+        if distance <= Config.WaypointReachedDistance then
+            reached = true
+            break
         end
         
-        humanoid:MoveTo(waypoint.Position)
-        
-        -- Wait for movement
-        local timeout = 8
-        local startTime = tick()
-        
-        repeat
-            task.wait(0.1)
-            if not isNavigating then
+        if Config.UseStuckRecovery and IsStuck() then
+            if State.stuckCount >= Config.MaxStuckAttempts then
+                Log("Max stuck attempts reached", "ERROR")
                 return false
             end
-        until (rootPart.Position - waypoint.Position).Magnitude < 5 or (tick() - startTime) > timeout
+            RecoverFromStuck()
+        end
+        
+        task.wait(0.1)
     end
     
-    isNavigating = false
-    print("[Pathfinding] Navigation complete!")
+    return reached
+end
+
+local function FollowPath(pathData)
+    if not pathData or not pathData.waypoints then
+        Log("Invalid path data", "ERROR")
+        return false
+    end
+    
+    local waypoints = OptimizeWaypoints(pathData.waypoints)
+    State.currentWaypointIndex = 1
+    
+    Log("Following path with " .. #waypoints .. " waypoints")
+    
+    -- Draw path lines
+    for i = 1, #waypoints - 1 do
+        CreatePathLine(waypoints[i].Position, waypoints[i + 1].Position)
+    end
+    
+    -- Follow each waypoint
+    for i, waypoint in ipairs(waypoints) do
+        if not State.isNavigating then
+            Log("Navigation cancelled", "WARN")
+            return false
+        end
+        
+        State.currentWaypointIndex = i
+        
+        local success = MoveToWaypoint(waypoint)
+        if not success and i < #waypoints then
+            Log("Failed at waypoint " .. i .. "/" .. #waypoints, "ERROR")
+            return false
+        end
+        
+        task.wait(0.1)
+    end
+    
+    Log("Path completed successfully!", "INFO")
     return true
 end
 
-function PathfindingModule.Stop()
-    print("[Pathfinding] Stopping navigation")
-    isNavigating = false
+-- ===================================
+-- MAIN NAVIGATION FUNCTION
+-- ===================================
+
+function PathfindingModule.Navigate(target, mode)
+    PathfindingModule.Stop()
     
-    local character = LocalPlayer.Character
-    if character then
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        local rootPart = character:FindFirstChild("HumanoidRootPart")
-        if humanoid and rootPart then
-            humanoid:MoveTo(rootPart.Position)
+    State.stuckCount = 0
+    State.lastMoveTime = tick()
+    
+    local rootPart = GetRootPart()
+    if not rootPart then
+        Log("No character root part", "ERROR")
+        return false
+    end
+    
+    local startPos = rootPart.Position
+    local endPos = GetPosition(target)
+    
+    if not endPos then
+        Log("Invalid target", "ERROR")
+        return false
+    end
+    
+    local distance = GetDistance(startPos, endPos)
+    if distance > Config.MaxPathDistance then
+        Log("Target too far: " .. math.floor(distance) .. " studs", "ERROR")
+        return false
+    end
+    
+    State.isNavigating = true
+    State.targetPosition = endPos
+    State.startTime = tick()
+    Stats.totalPaths = Stats.totalPaths + 1
+    
+    Log("Starting navigation, distance: " .. math.floor(distance) .. " studs")
+    
+    ClearVisualizations()
+    
+    local maxAttempts = 3
+    local success = false
+    
+    for attempt = 1, maxAttempts do
+        if attempt > 1 then
+            Log("Retry attempt " .. attempt .. "/" .. maxAttempts, "WARN")
+            task.wait(1)
+        end
+        
+        local pathData = ComputePath(rootPart.Position, endPos, true)
+        
+        if pathData then
+            State.currentPath = pathData
+            success = FollowPath(pathData)
+            
+            if success then
+                break
+            end
+        else
+            Log("Path computation failed (attempt " .. attempt .. ")", "ERROR")
         end
     end
+    
+    local duration = tick() - State.startTime
+    State.isNavigating = false
+    
+    if success then
+        Stats.successfulPaths = Stats.successfulPaths + 1
+        Stats.totalPathTime = Stats.totalPathTime + duration
+        Stats.averagePathTime = Stats.totalPathTime / Stats.successfulPaths
+        Log("Navigation successful! Duration: " .. math.floor(duration) .. "s", "INFO")
+    else
+        Stats.failedPaths = Stats.failedPaths + 1
+        Log("Navigation failed after " .. math.floor(duration) .. "s", "ERROR")
+    end
+    
+    return success
+end
+
+-- ===================================
+-- CONTROL FUNCTIONS
+-- ===================================
+
+function PathfindingModule.Stop()
+    if State.isNavigating then
+        Log("Stopping navigation", "INFO")
+        State.isNavigating = false
+        
+        local humanoid = GetHumanoid()
+        if humanoid then
+            local rootPart = GetRootPart()
+            if rootPart then
+                humanoid:MoveTo(rootPart.Position)
+            end
+        end
+    end
+    
+    ClearVisualizations()
 end
 
 function PathfindingModule.GetStatus()
     return {
-        isNavigating = isNavigating,
-        currentWaypoint = 0,
-        totalWaypoints = 0,
-        mode = "basic",
-        stuckCount = 0,
-        deathZones = 0,
-        stats = {
-            totalPaths = 0,
-            successfulPaths = 0,
-            failedPaths = 0,
-            jumpsExecuted = 0,
-            stucksRecovered = 0,
-            deathsLearned = 0
-        }
+        isNavigating = State.isNavigating,
+        currentWaypoint = State.currentWaypointIndex,
+        totalWaypoints = State.currentPath and #State.currentPath.waypoints or 0,
+        mode = "advanced",
+        stuckCount = State.stuckCount,
+        deathZones = #State.deathZones,
+        stats = Stats
     }
 end
 
 function PathfindingModule.ClearLearning()
-    print("[Pathfinding] ClearLearning called (no-op in simple version)")
+    State.deathZones = {}
+    Stats.deathsLearned = 0
+    Log("Learning database cleared", "INFO")
 end
 
-print("[Pathfinding] Simple module loaded successfully!")
+function PathfindingModule.SetConfig(key, value)
+    if Config[key] ~= nil then
+        Config[key] = value
+        Log("Config updated: " .. key .. " = " .. tostring(value))
+        return true
+    end
+    return false
+end
+
+function PathfindingModule.GetConfig()
+    return Config
+end
+
+-- ===================================
+-- CONFIGURATION PROFILES
+-- ===================================
+
+local Profiles = {
+    Fast = {
+        WaypointSpacing = 6,
+        StuckTimeout = 2,
+        UseSmartPathing = false
+    },
+    Precise = {
+        WaypointSpacing = 2,
+        StuckTimeout = 5,
+        UseSmartPathing = true,
+        UseJumpOptimization = true
+    },
+    Safe = {
+        WaypointSpacing = 4,
+        UseSmartPathing = true,
+        UseLedgeDetection = true,
+        UseStuckRecovery = true,
+        MaxStuckAttempts = 5
+    },
+    Obby = {
+        WaypointSpacing = 3,
+        UseJumpOptimization = true,
+        ShowWaypoints = true,
+        ShowPath = true
+    }
+}
+
+function PathfindingModule.LoadProfile(profileName)
+    local profile = Profiles[profileName]
+    if not profile then
+        Log("Profile not found: " .. profileName, "ERROR")
+        return false
+    end
+    
+    for key, value in pairs(profile) do
+        if Config[key] ~= nil then
+            Config[key] = value
+        end
+    end
+    
+    Log("Profile loaded: " .. profileName)
+    return true
+end
+
+function PathfindingModule.GetAvailableProfiles()
+    local names = {}
+    for name, _ in pairs(Profiles) do
+        table.insert(names, name)
+    end
+    return names
+end
+
+function PathfindingModule.SmartNavigate(target)
+    local rootPart = GetRootPart()
+    if not rootPart then return false end
+    
+    local targetPos = GetPosition(target)
+    if not targetPos then return false end
+    
+    local distance = GetDistance(rootPart.Position, targetPos)
+    local heightDiff = math.abs(targetPos.Y - rootPart.Position.Y)
+    
+    local profile = "Fast"
+    
+    if heightDiff > 20 then
+        profile = "Obby"
+        Log("High vertical distance - using Obby profile")
+    elseif distance > 200 then
+        profile = "Fast"
+        Log("Long distance - using Fast profile")
+    else
+        profile = "Precise"
+        Log("Medium distance - using Precise profile")
+    end
+    
+    PathfindingModule.LoadProfile(profile)
+    return PathfindingModule.Navigate(target, "smart")
+end
+
+function PathfindingModule.GetDetailedStatus()
+    local status = PathfindingModule.GetStatus()
+    status.features = {
+        smartPathing = Config.UseSmartPathing,
+        jumpOptimization = Config.UseJumpOptimization,
+        stuckRecovery = Config.UseStuckRecovery,
+        deathLearning = true
+    }
+    return status
+end
+
+function PathfindingModule.ExportStatistics()
+    return {
+        totalPaths = Stats.totalPaths,
+        successfulPaths = Stats.successfulPaths,
+        failedPaths = Stats.failedPaths,
+        successRate = Stats.totalPaths > 0 and (Stats.successfulPaths / Stats.totalPaths * 100) or 0,
+        jumpsExecuted = Stats.jumpsExecuted,
+        stucksRecovered = Stats.stucksRecovered,
+        deathsLearned = Stats.deathsLearned,
+        averagePathTime = Stats.averagePathTime,
+        totalPathTime = Stats.totalPathTime,
+        deathZones = #State.deathZones
+    }
+end
+
+-- ===================================
+-- INITIALIZATION
+-- ===================================
+
+MonitorDeath()
+
+Log("Advanced Pathfinding Module V2 loaded successfully!")
+Log("Features: Death Learning, Stuck Recovery, Smart Pathing, Jump Optimization")
+Log("Total lines: ~850 | Profiles: Fast, Precise, Safe, Obby")
 
 return PathfindingModule
