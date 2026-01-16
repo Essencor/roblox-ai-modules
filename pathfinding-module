@@ -37,7 +37,8 @@ local Config = {
     MaxStuckAttempts = 8,
     DeathRadius = 10,
     MaxDeathZones = 50,
-    WaypointReachedDistance = 4,
+    WaypointReachedDistance = 6,  -- Increased from 4 for better reliability
+    FinalWaypointDistance = 8,    -- Even more lenient for final destination
     ShowPath = false,
     ShowWaypoints = true,
     PathColor = Color3.new(0, 1, 0),
@@ -778,6 +779,14 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
     if not humanoid or not rootPart then return false end
     
     local waypointPos = waypoint.Position
+    local isFinalWaypoint = (waypointIndex == totalWaypoints)
+    local reachedDistance = isFinalWaypoint and Config.FinalWaypointDistance or Config.WaypointReachedDistance
+    
+    if isFinalWaypoint then
+        Log("Moving to FINAL waypoint " .. waypointIndex .. "/" .. totalWaypoints .. " (lenient: " .. reachedDistance .. " studs)", "INFO")
+    else
+        Log("Moving to waypoint " .. waypointIndex .. "/" .. totalWaypoints, "INFO")
+    end
     
     CreateWaypointMarker(waypointPos, Config.WaypointColor)
     
@@ -797,11 +806,12 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
     humanoid:MoveTo(waypointPos)
     
     local startTime = tick()
-    local timeout = 10
+    local timeout = isFinalWaypoint and 15 or 10  -- More time for final waypoint
     local reached = false
     local checkInterval = 0
     local lastJumpCheck = 0
     local jumpExecuted = false
+    local closestDistance = math.huge
     
     while tick() - startTime < timeout do
         if not State.isNavigating then
@@ -811,17 +821,39 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
         local currentPos = rootPart.Position
         local distance = GetDistance(currentPos, waypointPos)
         
+        -- Track closest distance
+        if distance < closestDistance then
+            closestDistance = distance
+        end
+        
         -- Check if reached
-        if distance <= Config.WaypointReachedDistance then
+        if distance <= reachedDistance then
             reached = true
             State.lastSuccessfulWaypoint = currentPos
+            Log("✓ Waypoint " .. waypointIndex .. " reached! (distance: " .. math.floor(distance) .. " studs)", "INFO")
             break
         end
         
-        -- Continuous safety scanning
-        if not PerformContinuousScan() then
-            Log("Safety scan failed - obstacle or cliff detected", "WARN")
-            return false
+        -- For final waypoint, be more lenient as time goes on
+        if isFinalWaypoint and tick() - startTime > 5 then
+            -- After 5 seconds, accept being within 12 studs
+            if distance <= 12 then
+                reached = true
+                State.lastSuccessfulWaypoint = currentPos
+                Log("✓ Final waypoint reached (lenient: " .. math.floor(distance) .. " studs)", "INFO")
+                break
+            end
+        end
+        
+        -- Continuous safety scanning (not for final waypoint if close)
+        if not (isFinalWaypoint and distance < 15) then
+            if not PerformContinuousScan() then
+                Log("Safety scan failed - obstacle or cliff detected", "WARN")
+                -- Don't fail on final waypoint if we're close
+                if not isFinalWaypoint or distance > 15 then
+                    return false
+                end
+            end
         end
         
         -- Continuous jump checking
@@ -877,7 +909,12 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
     end
     
     if not reached then
-        Log("Waypoint " .. waypointIndex .. "/" .. totalWaypoints .. " timeout", "WARN")
+        if isFinalWaypoint and closestDistance <= 15 then
+            Log("Final waypoint close enough! (closest: " .. math.floor(closestDistance) .. " studs)", "INFO")
+            return true  -- Accept close enough on final waypoint
+        else
+            Log("Waypoint " .. waypointIndex .. "/" .. totalWaypoints .. " timeout (closest: " .. math.floor(closestDistance) .. " studs)", "WARN")
+        end
     end
     
     return reached
@@ -1072,14 +1109,27 @@ function PathfindingModule.Navigate(target, mode)
     local duration = tick() - State.startTime
     State.isNavigating = false
     
+    -- Final check: if we're close enough to target, mark as success
+    if not success and rootPart then
+        local finalDistance = GetDistance(rootPart.Position, endPos)
+        if finalDistance <= 15 then
+            Log("✅ Close enough to target! Final distance: " .. math.floor(finalDistance) .. " studs", "INFO")
+            success = true
+        end
+    end
+    
     if success then
         Stats.successfulPaths = Stats.successfulPaths + 1
         Stats.totalPathTime = Stats.totalPathTime + duration
         Stats.averagePathTime = Stats.totalPathTime / Stats.successfulPaths
-        Log("✅ Navigation successful! Duration: " .. math.floor(duration) .. "s", "INFO")
+        
+        local finalDistance = GetDistance(rootPart.Position, endPos)
+        Log("✅ Navigation successful! Duration: " .. math.floor(duration) .. "s, Final distance: " .. math.floor(finalDistance) .. " studs", "INFO")
     else
         Stats.failedPaths = Stats.failedPaths + 1
-        Log("❌ Navigation failed after " .. math.floor(duration) .. "s", "ERROR")
+        
+        local finalDistance = rootPart and GetDistance(rootPart.Position, endPos) or 0
+        Log("❌ Navigation failed after " .. math.floor(duration) .. "s (final distance: " .. math.floor(finalDistance) .. " studs)", "ERROR")
         Log("💡 Possible reasons:", "INFO")
         Log("  - Target is unreachable", "INFO")
         Log("  - Path blocked by obstacles", "INFO")
