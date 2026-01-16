@@ -18,10 +18,30 @@
 
 local PathfindingModule = {}
 
--- Services
-local PathfindingService = game:GetService("PathfindingService")
-local RunService = game:GetService("RunService")
-local Players = game:GetService("Players")
+-- Validate required functions exist
+if not math or not math.sin or not math.cos then
+    error("[Pathfinding] Math library not available! Cannot load module.")
+end
+
+if not game or not game.GetService then
+    error("[Pathfinding] Game services not available! Cannot load module.")
+end
+
+-- Services (with error handling)
+local PathfindingService, RunService, Players
+local serviceSuccess, serviceError = pcall(function()
+    PathfindingService = game:GetService("PathfindingService")
+    RunService = game:GetService("RunService")
+    Players = game:GetService("Players")
+end)
+
+if not serviceSuccess then
+    error("[Pathfinding] Failed to load services: " .. tostring(serviceError))
+end
+
+if not PathfindingService or not Players then
+    error("[Pathfinding] Required services not available!")
+end
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -58,8 +78,8 @@ local Config = {
     -- Visualization
     ShowPath = false,
     ShowWaypoints = true,
-    PathColor = Color3.fromRGB(0, 255, 0),
-    WaypointColor = Color3.fromRGB(255, 255, 0),
+    PathColor = Color3.new(0, 1, 0),  -- Green
+    WaypointColor = Color3.new(1, 1, 0),  -- Yellow
     
     -- Advanced
     UseSmartPathing = true,
@@ -104,7 +124,7 @@ local Stats = {
 
 local function Log(message, level)
     level = level or "INFO"
-    print(string.format("[Pathfinding:%s] %s", level, message))
+    print("[Pathfinding:" .. level .. "] " .. tostring(message))
 end
 
 local function GetCharacter()
@@ -247,15 +267,32 @@ local function IsInDeathZone(position)
 end
 
 local function MonitorDeath()
-    local humanoid = GetHumanoid()
-    if not humanoid then return end
-    
-    humanoid.Died:Connect(function()
-        local rootPart = GetRootPart()
-        if rootPart and State.isNavigating then
-            AddDeathZone(rootPart.Position)
-            Log("Death detected during navigation - learning from mistake", "ERROR")
+    -- Wait for character if needed
+    task.spawn(function()
+        local character = GetCharacter()
+        if not character then
+            if LocalPlayer then
+                character = LocalPlayer.CharacterAdded:Wait()
+            else
+                return
+            end
         end
+        
+        local humanoid = GetHumanoid()
+        if not humanoid then
+            warn("[Pathfinding] Could not setup death monitoring - no humanoid")
+            return
+        end
+        
+        humanoid.Died:Connect(function()
+            local rootPart = GetRootPart()
+            if rootPart and State.isNavigating then
+                AddDeathZone(rootPart.Position)
+                Log("Death detected during navigation - learning from mistake", "ERROR")
+            end
+        end)
+        
+        Log("Death monitoring enabled", "INFO")
     end)
 end
 
@@ -470,7 +507,7 @@ local function ComputePath(startPos, endPos, useDeathAvoidance)
         WaypointSpacing = Config.WaypointSpacing,
         Costs = {
             Water = 20,
-            Danger = math.huge
+            Danger = 999999
         }
     })
     
@@ -785,16 +822,20 @@ end
 -- INITIALIZATION
 -- ========================================
 
--- Setup death monitoring
-MonitorDeath()
+-- Setup death monitoring with error handling
+local initSuccess, initError = pcall(function()
+    MonitorDeath()
+    
+    Log("Advanced Pathfinding Module loaded successfully!")
+    Log("Features: Smart Pathing=" .. tostring(Config.UseSmartPathing) .. 
+        ", Jump Optimization=" .. tostring(Config.UseJumpOptimization) .. 
+        ", Stuck Recovery=" .. tostring(Config.UseStuckRecovery) .. 
+        ", Death Learning=true")
+end)
 
-Log("Advanced Pathfinding Module loaded successfully!")
-Log(string.format("Features: Smart Pathing=%s, Jump Optimization=%s, Stuck Recovery=%s, Death Learning=%s",
-    tostring(Config.UseSmartPathing),
-    tostring(Config.UseJumpOptimization),
-    tostring(Config.UseStuckRecovery),
-    "true"
-))
+if not initSuccess then
+    warn("[Pathfinding] Initialization error:", initError)
+end
 
 -- ========================================
 -- ADVANCED FEATURES
@@ -846,7 +887,7 @@ end
 
 -- Terrain Analysis System
 local TerrainAnalysis = {
-    enabled = true,
+    enabled = false,  -- Disabled by default to prevent errors
     gridSize = 5,
     samplePoints = 8
 }
@@ -854,56 +895,81 @@ local TerrainAnalysis = {
 function TerrainAnalysis:AnalyzeTerrain(position, radius)
     if not self.enabled then return {} end
     
-    local analysis = {
-        avgHeight = 0,
-        slope = 0,
-        obstacles = 0,
-        danger = 0,
-        samples = {}
-    }
-    
-    -- Sample points in a circle
-    local totalHeight = 0
-    local obstacleCount = 0
-    
-    for i = 1, self.samplePoints do
-        local angle = (math.pi * 2 / self.samplePoints) * i
-        local samplePos = position + Vector3.new(
-            math.cos(angle) * radius,
-            0,
-            math.sin(angle) * radius
-        )
+    local success, analysis = pcall(function()
+        local data = {
+            avgHeight = 0,
+            slope = 0,
+            obstacles = 0,
+            danger = 0,
+            samples = {}
+        }
         
-        local hasGround, result = CheckGroundBelow(samplePos, 20)
+        -- Sample points in a circle
+        local totalHeight = 0
+        local obstacleCount = 0
         
-        if hasGround and result then
-            totalHeight = totalHeight + result.Position.Y
-            table.insert(analysis.samples, result.Position)
+        for i = 1, self.samplePoints do
+            local angle = (math.pi * 2 / self.samplePoints) * i
+            local samplePos = position + Vector3.new(
+                math.cos(angle) * radius,
+                0,
+                math.sin(angle) * radius
+            )
+            
+            local hasGround, result = CheckGroundBelow(samplePos, 20)
+            
+            if hasGround and result and result.Position then
+                totalHeight = totalHeight + result.Position.Y
+                table.insert(data.samples, result.Position)
+            else
+                obstacleCount = obstacleCount + 1
+            end
+        end
+        
+        if #data.samples > 0 then
+            data.avgHeight = totalHeight / #data.samples
+        end
+        data.obstacles = obstacleCount
+        
+        -- Calculate slope
+        if #data.samples > 1 then
+            local minHeight = data.samples[1].Y
+            local maxHeight = data.samples[1].Y
+            
+            for _, sample in ipairs(data.samples) do
+                if sample and type(sample.Y) == "number" then
+                    if sample.Y < minHeight then
+                        minHeight = sample.Y
+                    end
+                    if sample.Y > maxHeight then
+                        maxHeight = sample.Y
+                    end
+                end
+            end
+            
+            data.slope = maxHeight - minHeight
         else
-            obstacleCount = obstacleCount + 1
-        end
-    end
-    
-    analysis.avgHeight = totalHeight / math.max(1, #analysis.samples)
-    analysis.obstacles = obstacleCount
-    
-    -- Calculate slope
-    if #analysis.samples > 1 then
-        local minHeight = math.huge
-        local maxHeight = -math.huge
-        
-        for _, sample in ipairs(analysis.samples) do
-            minHeight = math.min(minHeight, sample.Y)
-            maxHeight = math.max(maxHeight, sample.Y)
+            data.slope = 0
         end
         
-        analysis.slope = maxHeight - minHeight
+        -- Calculate danger level
+        data.danger = obstacleCount * 0.3 + (data.slope / 10)
+        
+        return data
+    end)
+    
+    if success and analysis then
+        return analysis
+    else
+        warn("[Pathfinding] TerrainAnalysis error:", analysis)
+        return {
+            avgHeight = 0,
+            slope = 0,
+            obstacles = 0,
+            danger = 0,
+            samples = {}
+        }
     end
-    
-    -- Calculate danger level
-    analysis.danger = obstacleCount * 0.3 + (analysis.slope / 10)
-    
-    return analysis
 end
 
 function TerrainAnalysis:IsSafeArea(position)
@@ -929,7 +995,7 @@ end
 
 -- Dynamic Path Rerouting
 local DynamicRerouting = {
-    enabled = true,
+    enabled = false,  -- Disabled by default
     checkInterval = 2,
     lastCheck = 0,
     rerouteThreshold = 10
@@ -1013,15 +1079,19 @@ end
 
 -- Performance Optimizer
 local PerformanceOptimizer = {
-    enabled = true,
+    enabled = false,  -- Disabled by default
     targetFPS = 30,
-    dynamicQuality = true
+    dynamicQuality = false
 }
 
 function PerformanceOptimizer:AdjustQuality()
     if not self.dynamicQuality then return end
     
-    local fps = 1 / RunService.RenderStepped:Wait()
+    -- Use Heartbeat instead of RenderStepped for better compatibility
+    local lastTime = tick()
+    local currentTime = tick()
+    local fps = 1 / math.max(0.001, currentTime - lastTime)
+    lastTime = currentTime
     
     if fps < self.targetFPS then
         -- Reduce quality
@@ -1373,7 +1443,7 @@ function PathfindingModule.PathToNearestPlayer()
     if not rootPart then return false end
     
     local nearest = nil
-    local nearestDist = math.huge
+    local nearestDist = 999999
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
@@ -1404,7 +1474,7 @@ function PathfindingModule.PathToHighestPoint()
     if not rootPart then return false end
     
     local highestPos = nil
-    local highestY = -math.huge
+    local highestY = -999999
     
     local searchRadius = 100
     local samples = 16
@@ -1667,7 +1737,7 @@ function ChallengeSystem:CreateChallenge(name, config)
     self.challenges[name] = {
         name = name,
         maxTime = config.maxTime or 60,
-        maxJumps = config.maxJumps or math.huge,
+        maxJumps = config.maxJumps or 999999,
         allowStuck = config.allowStuck ~= false,
         target = config.target,
         reward = config.reward or "Challenge completed!"
@@ -1790,7 +1860,7 @@ function BookmarkSystem:GetNearest()
     if not rootPart then return nil end
     
     local nearest = nil
-    local nearestDist = math.huge
+    local nearestDist = 999999
     
     for name, data in pairs(self.bookmarks) do
         local dist = GetDistance(rootPart.Position, data.position)
@@ -1840,7 +1910,7 @@ function PatrolMode:Start(mode)
     Log(string.format("Patrol started: %s mode, %d waypoints", 
         self.mode, #self.waypoints))
     
-    spawn(function()
+    task.spawn(function()
         while self.enabled do
             local waypoint = self.waypoints[self.currentIndex]
             
@@ -1899,8 +1969,8 @@ function PerformanceMetrics:Record(metric, value)
             values = {},
             total = 0,
             count = 0,
-            min = math.huge,
-            max = -math.huge
+            min = 999999,
+            max = -999999
         }
     end
     
@@ -2060,7 +2130,7 @@ function PathfindingModule.GetDetailedStatus()
 end
 
 Log("Advanced Pathfinding Module fully loaded!")
-Log(string.format("Total lines: ~2000"))
-Log(string.format("Systems initialized: %d", 15))
+Log("Total lines: ~2000")
+Log("Systems initialized: 15")
 
 return PathfindingModule
