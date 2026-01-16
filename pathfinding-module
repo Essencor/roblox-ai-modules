@@ -1,14 +1,17 @@
 --[[
-    SMART PATHFINDING MODULE V3.1 (Integrated Edition)
-    Comprehensive intelligence and stuck recovery
+    INTEGRATED PATHFINDING MODULE V4
+    Pathfinding + Raycasting Vision Integration
     
-    INTEGRATED FEATURES:
-    - Vision Bridge: Communicates with Raycasting Module for proactive hazard detection.
-    - Advanced stuck detection (velocity-based and oscillation check)
-    - 8 recovery methods for complex environments
-    - Obstacle detection and avoidance
-    - Death learning system with zone reinforcement
-    - Dynamic path regeneration and waypoint skipping
+    FEATURES:
+    - Raycasting-powered obstacle avoidance
+    - Pre-navigation safety checks
+    - Real-time path validation
+    - Smart cliff avoidance
+    - Vision-guided stuck recovery
+    - Dynamic rerouting with raycasts
+    - Multi-range path planning
+    - 8 recovery methods
+    - Natural jump system
 ]]
 
 local PathfindingModule = {}
@@ -19,16 +22,19 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
+-- Raycasting Module Reference (will be injected)
+local RaycastingVision = nil
+
 -- Configuration
 local Config = {
     WaypointSpacing = 4,
     MaxPathDistance = 500,
     PathTimeout = 30,
     JumpCheckDistance = 8,
-    JumpHeight = 4, -- Lowered from 7 for better detection
-    StuckTimeout = 2, -- Reduced from 3
-    StuckDistance = 1.5, -- Reduced from 2
-    MaxStuckAttempts = 8, -- Increased from 3
+    JumpHeight = 5,
+    StuckTimeout = 2,
+    StuckDistance = 1.5,
+    MaxStuckAttempts = 8,
     DeathRadius = 10,
     MaxDeathZones = 50,
     WaypointReachedDistance = 4,
@@ -37,14 +43,22 @@ local Config = {
     PathColor = Color3.new(0, 1, 0),
     WaypointColor = Color3.new(1, 1, 0),
     UseSmartPathing = true,
-    UseJumpOptimization = false, -- Changed to false by default - let PathfindingService handle it
+    UseJumpOptimization = false,
     UseStuckRecovery = true,
     UseDynamicRerouting = true,
     UseObstacleDetection = true,
     MaxRetries = 3,
     VelocityCheckInterval = 0.5,
     MinVelocity = 0.5,
-    WaypointSkipDistance = 6
+    WaypointSkipDistance = 6,
+    
+    -- Raycasting Integration Settings
+    UseRaycastingVision = true,
+    PreNavigationScan = true,
+    ContinuousScanning = true,
+    CliffAvoidance = true,
+    VisionGuidedRecovery = true,
+    SafetyCheckInterval = 0.5
 }
 
 -- State
@@ -63,7 +77,9 @@ local State = {
     lastVelocity = Vector3.new(0, 0, 0),
     consecutiveStuckFrames = 0,
     lastSuccessfulWaypoint = nil,
-    rerouteAttempts = 0
+    rerouteAttempts = 0,
+    lastSafetyCheck = 0,
+    visionData = nil
 }
 
 -- Statistics
@@ -77,11 +93,11 @@ local Stats = {
     averagePathTime = 0,
     totalPathTime = 0,
     pathsRerouted = 0,
-    waypointsSkipped = 0
+    waypointsSkipped = 0,
+    raycastingUsed = 0,
+    cliffsAvoided = 0,
+    visionRecoveries = 0
 }
-
--- 🔗 NEW: Vision Bridge Reference
-PathfindingModule.VisionModule = nil
 
 -- ===================================
 -- UTILITY FUNCTIONS
@@ -123,6 +139,122 @@ local function GetPosition(obj)
             return obj.Position
         end
     end
+    return nil
+end
+
+-- ===================================
+-- RAYCASTING INTEGRATION
+-- ===================================
+
+function PathfindingModule.SetRaycastingModule(raycastModule)
+    RaycastingVision = raycastModule
+    if RaycastingVision then
+        Log("Raycasting vision module connected!", "INFO")
+        Log("Vision-powered pathfinding enabled", "INFO")
+    else
+        Log("Raycasting module disconnected", "WARN")
+    end
+end
+
+local function HasRaycasting()
+    return RaycastingVision ~= nil and Config.UseRaycastingVision
+end
+
+local function PerformPreNavigationScan(targetPos)
+    if not HasRaycasting() or not Config.PreNavigationScan then
+        return true, nil
+    end
+    
+    Stats.raycastingUsed = Stats.raycastingUsed + 1
+    
+    Log("Performing pre-navigation safety scan...", "INFO")
+    
+    -- Check if we can see the target
+    local hasLineOfSight, distance = RaycastingVision.CheckLineOfSight(targetPos)
+    
+    if hasLineOfSight then
+        Log("Direct line of sight to target! Distance: " .. math.floor(distance) .. " studs", "INFO")
+    end
+    
+    -- Multi-range scan
+    local multiScan = RaycastingVision.ScanMultiRange()
+    
+    if multiScan then
+        Log("Multi-range scan: " .. multiScan.clearestRange .. " range clear", "INFO")
+    end
+    
+    -- Check for immediate obstacles
+    local hasObstacle, obstacleHit, obstacleDist = RaycastingVision.CheckObstacleAhead(10)
+    
+    if hasObstacle and obstacleDist < 3 then
+        Log("Immediate obstacle detected at " .. math.floor(obstacleDist) .. " studs", "WARN")
+        return false, "immediate_obstacle"
+    end
+    
+    -- Check for cliffs
+    if Config.CliffAvoidance then
+        local hasCliff, cliffInfo = RaycastingVision.DetectCliff(10)
+        if hasCliff then
+            Stats.cliffsAvoided = Stats.cliffsAvoided + 1
+            Log("Cliff detected ahead! Type: " .. (cliffInfo and cliffInfo.type or "unknown"), "WARN")
+            return false, "cliff_ahead"
+        end
+    end
+    
+    Log("Pre-navigation scan complete - path appears safe", "INFO")
+    return true, nil
+end
+
+local function PerformContinuousScan()
+    if not HasRaycasting() or not Config.ContinuousScanning then
+        return true
+    end
+    
+    if tick() - State.lastSafetyCheck < Config.SafetyCheckInterval then
+        return true
+    end
+    
+    State.lastSafetyCheck = tick()
+    
+    -- Quick forward scan
+    local forwardScan = RaycastingVision.ScanForward(10, 5)
+    
+    if forwardScan and forwardScan.hasObstacle and forwardScan.minDistance < 3 then
+        Log("Obstacle detected during navigation at " .. math.floor(forwardScan.minDistance) .. " studs", "WARN")
+        return false
+    end
+    
+    -- Check for cliffs
+    if Config.CliffAvoidance then
+        local hasCliff = RaycastingVision.DetectCliff(5)
+        if hasCliff then
+            Stats.cliffsAvoided = Stats.cliffsAvoided + 1
+            Log("Cliff detected during navigation!", "WARN")
+            return false
+        end
+    end
+    
+    return true
+end
+
+local function FindClearPathWithVision()
+    if not HasRaycasting() then
+        return nil
+    end
+    
+    Log("Using raycasting to find clear path...", "INFO")
+    Stats.visionRecoveries = Stats.visionRecoveries + 1
+    
+    -- 360° scan to find clearest direction
+    local circularScan = RaycastingVision.ScanCircular(15, 16)
+    
+    if circularScan and #circularScan.clearDirections > 0 then
+        -- Pick the clearest direction
+        local bestDirection = circularScan.clearDirections[1]
+        Log("Found clear direction using vision", "INFO")
+        return bestDirection
+    end
+    
     return nil
 end
 
@@ -202,86 +334,28 @@ end
 
 local function MonitorDeath()
     task.spawn(function()
-        while true do
-            local character = GetCharacter()
-            if character then
-                local humanoid = GetHumanoid()
-                if humanoid then
-                    humanoid.Died:Wait()
-                    local rootPart = GetRootPart()
-                    if rootPart and State.isNavigating then
-                        AddDeathZone(rootPart.Position)
-                        Log("Death detected during navigation - learning from mistake", "ERROR")
-                    end
-                end
-            end
-            task.wait(1)
+        local character = GetCharacter()
+        if not character then
+            character = LocalPlayer.CharacterAdded:Wait()
         end
+        
+        local humanoid = GetHumanoid()
+        if not humanoid then
+            return
+        end
+        
+        humanoid.Died:Connect(function()
+            local rootPart = GetRootPart()
+            if rootPart and State.isNavigating then
+                AddDeathZone(rootPart.Position)
+                Log("Death detected during navigation - learning from mistake", "ERROR")
+            end
+        end)
     end)
 end
 
 -- ===================================
--- OBSTACLE DETECTION
--- ===================================
-
-local function RaycastCheck(origin, direction, distance)
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-    raycastParams.FilterDescendantsInstances = {GetCharacter()}
-    
-    local result = workspace:Raycast(origin, direction * distance, raycastParams)
-    return result
-end
-
-local function CheckGroundBelow(position, distance)
-    distance = distance or 10
-    local result = RaycastCheck(position, Vector3.new(0, -1, 0), distance)
-    return result ~= nil, result
-end
-
-local function CheckObstacleAhead(currentPos, targetPos, checkDistance)
-    checkDistance = checkDistance or 5
-    local direction = (targetPos - currentPos).Unit
-    local distance = math.min(GetDistance(currentPos, targetPos), checkDistance)
-    
-    local result = RaycastCheck(currentPos + Vector3.new(0, 2, 0), direction, distance)
-    return result ~= nil, result
-end
-
-local function CheckJumpRequired(currentPos, nextPos)
-    local heightDiff = nextPos.Y - currentPos.Y
-    
-    -- Only trigger high jump for significant height
-    if heightDiff > 5 then
-        return true, "high_jump"
-    end
-    
-    -- Check for gaps (no ground between)
-    local midpoint = (currentPos + nextPos) / 2
-    local hasGround = CheckGroundBelow(midpoint, 20)
-    
-    if not hasGround then
-        local distance = GetDistance(
-            Vector3.new(currentPos.X, 0, currentPos.Z),
-            Vector3.new(nextPos.X, 0, nextPos.Z)
-        )
-        
-        -- Only gap jump for significant gaps
-        if distance > 5 then
-            return true, "gap_jump"
-        end
-    end
-    
-    -- Check for medium elevation (normal jump needed)
-    if heightDiff > 2 and heightDiff <= 5 then
-        return true, "normal"
-    end
-    
-    return false, nil
-end
-
--- ===================================
--- ENHANCED STUCK DETECTION
+-- POSITION HISTORY TRACKING
 -- ===================================
 
 local function UpdatePositionHistory()
@@ -293,7 +367,6 @@ local function UpdatePositionHistory()
         time = tick()
     })
     
-    -- Keep only last 10 positions
     if #State.positionHistory > 10 then
         table.remove(State.positionHistory, 1)
     end
@@ -312,6 +385,10 @@ local function CalculateVelocity()
     return Vector3.new(0, 0, 0)
 end
 
+-- ===================================
+-- ENHANCED STUCK DETECTION
+-- ===================================
+
 local function IsStuckAdvanced()
     local rootPart = GetRootPart()
     if not rootPart then return false end
@@ -319,12 +396,12 @@ local function IsStuckAdvanced()
     local currentPos = rootPart.Position
     local timeSinceMove = tick() - State.lastMoveTime
     
-    -- Check 1: Traditional distance check
+    -- Check 1: Distance
     if State.lastPosition then
         local distanceMoved = GetDistance(currentPos, State.lastPosition)
         
         if distanceMoved < Config.StuckDistance and timeSinceMove > Config.StuckTimeout then
-            Log("Stuck detected: Distance check (moved " .. math.floor(distanceMoved * 10) / 10 .. " studs in " .. math.floor(timeSinceMove * 10) / 10 .. "s)", "WARN")
+            Log("Stuck: Distance check (moved " .. math.floor(distanceMoved * 10) / 10 .. " studs)", "WARN")
             return true, "distance"
         end
         
@@ -334,7 +411,7 @@ local function IsStuckAdvanced()
         end
     end
     
-    -- Check 2: Velocity check
+    -- Check 2: Velocity
     local velocity = CalculateVelocity()
     local velocityMagnitude = velocity.Magnitude
     
@@ -342,14 +419,14 @@ local function IsStuckAdvanced()
         State.consecutiveStuckFrames = State.consecutiveStuckFrames + 1
         
         if State.consecutiveStuckFrames > 5 then
-            Log("Stuck detected: Velocity check (speed: " .. math.floor(velocityMagnitude * 100) / 100 .. ")", "WARN")
+            Log("Stuck: Velocity check (speed: " .. math.floor(velocityMagnitude * 100) / 100 .. ")", "WARN")
             return true, "velocity"
         end
     else
         State.consecutiveStuckFrames = 0
     end
     
-    -- Check 3: Position oscillation (bouncing back and forth)
+    -- Check 3: Position oscillation
     if #State.positionHistory >= 6 then
         local recent = State.positionHistory
         local avgDistance = 0
@@ -360,7 +437,7 @@ local function IsStuckAdvanced()
         avgDistance = avgDistance / 6
         
         if avgDistance < 3 and timeSinceMove > Config.StuckTimeout * 1.5 then
-            Log("Stuck detected: Oscillation (bouncing in " .. math.floor(avgDistance * 10) / 10 .. " stud radius)", "WARN")
+            Log("Stuck: Oscillation (bouncing in " .. math.floor(avgDistance * 10) / 10 .. " stud radius)", "WARN")
             return true, "oscillation"
         end
     end
@@ -373,7 +450,7 @@ local function IsStuckAdvanced()
            state == Enum.HumanoidStateType.Ragdoll or
            state == Enum.HumanoidStateType.FallingDown then
             if timeSinceMove > 2 then
-                Log("Stuck detected: Abnormal humanoid state (" .. tostring(state) .. ")", "WARN")
+                Log("Stuck: Abnormal humanoid state (" .. tostring(state) .. ")", "WARN")
                 return true, "state"
             end
         end
@@ -385,7 +462,7 @@ local function IsStuckAdvanced()
 end
 
 -- ===================================
--- ENHANCED STUCK RECOVERY (8 METHODS)
+-- VISION-GUIDED STUCK RECOVERY
 -- ===================================
 
 local function RecoverFromStuck(stuckType)
@@ -397,45 +474,56 @@ local function RecoverFromStuck(stuckType)
     local humanoid = GetHumanoid()
     if not rootPart or not humanoid then return false end
     
+    -- Try vision-guided recovery first
+    if Config.VisionGuidedRecovery and HasRaycasting() and State.stuckCount % 2 == 0 then
+        local clearDirection = FindClearPathWithVision()
+        if clearDirection then
+            Log("Vision-guided recovery: Moving to clear direction", "INFO")
+            local moveTarget = rootPart.Position + (clearDirection * 8)
+            humanoid:MoveTo(moveTarget)
+            task.wait(1)
+            State.lastMoveTime = tick()
+            State.lastPosition = rootPart.Position
+            State.consecutiveStuckFrames = 0
+            State.positionHistory = {}
+            return true
+        end
+    end
+    
+    -- Standard recovery methods
     local recoveryMethod = ((State.stuckCount - 1) % 8) + 1
     
     if recoveryMethod == 1 then
-        -- Jump
-        Log("Recovery 1/8: Jump")
+        Log("Recovery 1/8: Double Jump")
         for i = 1, 2 do
             humanoid.Jump = true
             task.wait(0.2)
         end
         
     elseif recoveryMethod == 2 then
-        -- Move backwards
         Log("Recovery 2/8: Move backwards")
         local backwardPos = rootPart.Position - rootPart.CFrame.LookVector * 6
         humanoid:MoveTo(backwardPos)
         task.wait(1)
         
     elseif recoveryMethod == 3 then
-        -- Move to side (right)
         Log("Recovery 3/8: Move right")
         local sidePos = rootPart.Position + rootPart.CFrame.RightVector * 6
         humanoid:MoveTo(sidePos)
         task.wait(1)
         
     elseif recoveryMethod == 4 then
-        -- Move to side (left)
         Log("Recovery 4/8: Move left")
         local sidePos = rootPart.Position - rootPart.CFrame.RightVector * 6
         humanoid:MoveTo(sidePos)
         task.wait(1)
         
     elseif recoveryMethod == 5 then
-        -- Teleport up
         Log("Recovery 5/8: Teleport up")
         rootPart.CFrame = rootPart.CFrame + Vector3.new(0, 4, 0)
         task.wait(0.5)
         
     elseif recoveryMethod == 6 then
-        -- Jump backwards
         Log("Recovery 6/8: Jump backwards")
         humanoid.Jump = true
         task.wait(0.1)
@@ -444,7 +532,6 @@ local function RecoverFromStuck(stuckType)
         task.wait(1)
         
     elseif recoveryMethod == 7 then
-        -- Rotate and move
         Log("Recovery 7/8: Rotate 90° and move")
         rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, math.rad(90), 0)
         task.wait(0.2)
@@ -453,7 +540,6 @@ local function RecoverFromStuck(stuckType)
         task.wait(1)
         
     else
-        -- Last resort: teleport back to last successful waypoint
         Log("Recovery 8/8: Teleport to last successful waypoint")
         if State.lastSuccessfulWaypoint then
             rootPart.CFrame = CFrame.new(State.lastSuccessfulWaypoint)
@@ -464,7 +550,6 @@ local function RecoverFromStuck(stuckType)
         end
     end
     
-    -- Reset stuck detection variables
     State.lastMoveTime = tick()
     State.lastPosition = rootPart.Position
     State.consecutiveStuckFrames = 0
@@ -474,7 +559,7 @@ local function RecoverFromStuck(stuckType)
 end
 
 -- ===================================
--- JUMP EXECUTION
+-- JUMP EXECUTION (NATURAL)
 -- ===================================
 
 local function ExecuteJump(jumpType)
@@ -486,7 +571,6 @@ local function ExecuteJump(jumpType)
     Stats.jumpsExecuted = Stats.jumpsExecuted + 1
     
     if jumpType == "high_jump" then
-        -- Multiple jumps for high obstacles
         Log("High jump: Triple jump sequence")
         humanoid.Jump = true
         task.wait(0.2)
@@ -496,17 +580,11 @@ local function ExecuteJump(jumpType)
         task.wait(0.3)
         
     elseif jumpType == "gap_jump" then
-        -- Single powerful jump for gaps
         Log("Gap jump: Single jump with momentum")
         humanoid.Jump = true
         task.wait(0.3)
-    
-    elseif jumpType == "vision_jump" then
-        -- Fast jump triggered by vision module
-        humanoid.Jump = true
         
     else
-        -- Normal single jump
         Log("Normal jump: Single hop")
         humanoid.Jump = true
         task.wait(0.2)
@@ -515,8 +593,39 @@ local function ExecuteJump(jumpType)
     return true
 end
 
+local function CheckJumpRequired(currentPos, nextPos)
+    local heightDiff = nextPos.Y - currentPos.Y
+    
+    if heightDiff > 5 then
+        return true, "high_jump"
+    end
+    
+    -- Use raycasting for gap detection if available
+    if HasRaycasting() then
+        local midpoint = (currentPos + nextPos) / 2
+        local hasGround = RaycastingVision.CheckGround(midpoint, 20)
+        
+        if not hasGround then
+            local distance = GetDistance(
+                Vector3.new(currentPos.X, 0, currentPos.Z),
+                Vector3.new(nextPos.X, 0, nextPos.Z)
+            )
+            
+            if distance > 5 then
+                return true, "gap_jump"
+            end
+        end
+    end
+    
+    if heightDiff > 2 and heightDiff <= 5 then
+        return true, "normal"
+    end
+    
+    return false, nil
+end
+
 -- ===================================
--- PATH COMPUTATION WITH OBSTACLE AVOIDANCE
+-- PATH COMPUTATION
 -- ===================================
 
 local function ComputePath(startPos, endPos, useDeathAvoidance)
@@ -624,20 +733,20 @@ local function OptimizeWaypoints(waypoints)
 end
 
 -- ===================================
--- SMART WAYPOINT FOLLOWING
+-- WAYPOINT MOVEMENT
 -- ===================================
 
 local function CanSkipToWaypoint(currentPos, targetWaypoint, intermediateWaypoint)
-    -- Check if we can skip the intermediate waypoint
-    local hasObstacle = CheckObstacleAhead(currentPos, targetWaypoint.Position, 10)
-    
-    if not hasObstacle then
-        local directDist = GetDistance(currentPos, targetWaypoint.Position)
-        local intermediateDist = GetDistance(currentPos, intermediateWaypoint.Position) + 
-                                 GetDistance(intermediateWaypoint.Position, targetWaypoint.Position)
-        
-        if directDist < intermediateDist * 0.85 then
-            return true
+    if HasRaycasting() then
+        local hasLineOfSight = RaycastingVision.CheckLineOfSight(targetWaypoint.Position, currentPos)
+        if hasLineOfSight then
+            local directDist = GetDistance(currentPos, targetWaypoint.Position)
+            local intermediateDist = GetDistance(currentPos, intermediateWaypoint.Position) + 
+                                     GetDistance(intermediateWaypoint.Position, targetWaypoint.Position)
+            
+            if directDist < intermediateDist * 0.85 then
+                return true
+            end
         end
     end
     
@@ -689,38 +798,21 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             State.lastSuccessfulWaypoint = currentPos
             break
         end
-
-        -- ==========================================
-        -- 👁️ NEW: VISION BRIDGE INTEGRATION
-        -- ==========================================
-        if PathfindingModule.VisionModule then
-            local vision = PathfindingModule.VisionModule
-            -- Scan 8 studs ahead for hazards
-            local hasCliff, cliffInfo = vision.DetectCliff(8)
-
-            if hasCliff then
-                local dist = math.floor(cliffInfo.distance or 8)
-                Log("CLIFF DETECTED " .. dist .. " STUDS INFRONT", "WARN")
-                Log("Pathfinding: In " .. dist .. " Studs Jump Over!", "INFO")
-                
-                -- Execute jump if we are within range
-                if dist <= 6 then
-                    ExecuteJump("vision_jump")
-                    task.wait(0.1)
-                end
-            end
-        end
-        -- ==========================================
         
-        -- Continuous jump checking (every 0.5 seconds)
+        -- Continuous safety scanning
+        if not PerformContinuousScan() then
+            Log("Safety scan failed - obstacle or cliff detected", "WARN")
+            return false
+        end
+        
+        -- Continuous jump checking
         if Config.UseJumpOptimization and not jumpExecuted then
             if tick() - lastJumpCheck >= 0.5 then
                 local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
                 if needsJump then
-                    Log("Jump needed: " .. tostring(jumpType) .. " (distance to waypoint: " .. math.floor(distance) .. ")")
+                    Log("Jump needed: " .. tostring(jumpType) .. " (distance: " .. math.floor(distance) .. ")")
                     ExecuteJump(jumpType)
                     jumpExecuted = true
-                    -- Reset move command after jump
                     task.wait(0.3)
                     humanoid:MoveTo(waypointPos)
                 end
@@ -734,14 +826,14 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             if nextWaypoint then
                 local canSkip = CanSkipToWaypoint(currentPos, nextWaypoint, waypoint)
                 if canSkip then
-                    Log("Skipping waypoint " .. waypointIndex .. " (direct path available)")
+                    Log("Skipping waypoint " .. waypointIndex .. " (vision confirmed clear path)")
                     Stats.waypointsSkipped = Stats.waypointsSkipped + 1
                     return true
                 end
             end
         end
         
-        -- Update position history every 0.5s
+        -- Update position history
         checkInterval = checkInterval + 0.1
         if checkInterval >= Config.VelocityCheckInterval then
             UpdatePositionHistory()
@@ -757,7 +849,6 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
                     return false
                 end
                 RecoverFromStuck(stuckType)
-                -- Reset jump flag after recovery
                 jumpExecuted = false
                 lastJumpCheck = 0
             end
@@ -852,11 +943,6 @@ end
 -- MAIN NAVIGATION FUNCTION
 -- ===================================
 
-function PathfindingModule.SetVisionModule(module)
-    PathfindingModule.VisionModule = module
-    Log("Vision module linked to Pathfinding! 👁️")
-end
-
 function PathfindingModule.Navigate(target, mode)
     PathfindingModule.Stop()
     
@@ -892,6 +978,21 @@ function PathfindingModule.Navigate(target, mode)
     Stats.totalPaths = Stats.totalPaths + 1
     
     Log("Starting navigation, distance: " .. math.floor(distance) .. " studs")
+    
+    if HasRaycasting() then
+        Log("Raycasting vision: ACTIVE", "INFO")
+    else
+        Log("Raycasting vision: DISABLED", "WARN")
+    end
+    
+    -- Pre-navigation scan
+    local safeToNavigate, reason = PerformPreNavigationScan(endPos)
+    if not safeToNavigate then
+        Log("Pre-navigation scan failed: " .. tostring(reason), "ERROR")
+        State.isNavigating = false
+        Stats.failedPaths = Stats.failedPaths + 1
+        return false
+    end
     
     ClearVisualizations()
     
@@ -960,12 +1061,29 @@ function PathfindingModule.GetStatus()
         isNavigating = State.isNavigating,
         currentWaypoint = State.currentWaypointIndex,
         totalWaypoints = State.currentPath and #State.currentPath.waypoints or 0,
-        mode = "smart",
+        mode = "integrated",
         stuckCount = State.stuckCount,
         deathZones = #State.deathZones,
         rerouteAttempts = State.rerouteAttempts,
+        raycastingEnabled = HasRaycasting(),
         stats = Stats
     }
+end
+
+function PathfindingModule.GetDetailedStatus()
+    local status = PathfindingModule.GetStatus()
+    status.features = {
+        raycastingVision = HasRaycasting(),
+        preNavigationScan = Config.PreNavigationScan,
+        continuousScanning = Config.ContinuousScanning,
+        cliffAvoidance = Config.CliffAvoidance,
+        visionGuidedRecovery = Config.VisionGuidedRecovery,
+        smartPathing = Config.UseSmartPathing,
+        jumpOptimization = Config.UseJumpOptimization,
+        stuckRecovery = Config.UseStuckRecovery,
+        dynamicRerouting = Config.UseDynamicRerouting
+    }
+    return status
 end
 
 function PathfindingModule.ClearLearning()
@@ -987,88 +1105,6 @@ function PathfindingModule.GetConfig()
     return Config
 end
 
--- ===================================
--- CONFIGURATION PROFILES
--- ===================================
-
-local Profiles = {
-    Fast = {
-        WaypointSpacing = 6,
-        StuckTimeout = 1.5,
-        UseSmartPathing = false,
-        UseDynamicRerouting = false,
-        UseJumpOptimization = false
-    },
-    Precise = {
-        WaypointSpacing = 2,
-        StuckTimeout = 2,
-        UseSmartPathing = true,
-        UseJumpOptimization = false,
-        UseDynamicRerouting = true
-    },
-    Safe = {
-        WaypointSpacing = 4,
-        UseSmartPathing = true,
-        UseStuckRecovery = true,
-        MaxStuckAttempts = 8,
-        UseDynamicRerouting = true,
-        UseObstacleDetection = true,
-        UseJumpOptimization = false
-    },
-    Obby = {
-        WaypointSpacing = 3,
-        UseJumpOptimization = true,  -- Only enable for obby mode
-        ShowWaypoints = true,
-        ShowPath = true,
-        StuckTimeout = 1.5,
-        MaxStuckAttempts = 8
-    }
-}
-
-function PathfindingModule.LoadProfile(profileName)
-    local profile = Profiles[profileName]
-    if not profile then
-        Log("Profile not found: " .. profileName, "ERROR")
-        return false
-    end
-    
-    for key, value in pairs(profile) do
-        if Config[key] ~= nil then
-            Config[key] = value
-        end
-    end
-    
-    Log("Profile loaded: " .. profileName)
-    return true
-end
-
-function PathfindingModule.SmartNavigate(target)
-    local rootPart = GetRootPart()
-    if not rootPart then return false end
-    
-    local targetPos = GetPosition(target)
-    if not targetPos then return false end
-    
-    local distance = GetDistance(rootPart.Position, targetPos)
-    local heightDiff = math.abs(targetPos.Y - rootPart.Position.Y)
-    
-    local profile = "Precise"
-    
-    if heightDiff > 20 then
-        profile = "Obby"
-        Log("High vertical distance - using Obby profile")
-    elseif distance > 200 then
-        profile = "Fast"
-        Log("Long distance - using Fast profile")
-    else
-        profile = "Safe"
-        Log("Medium distance - using Safe profile")
-    end
-    
-    PathfindingModule.LoadProfile(profile)
-    return PathfindingModule.Navigate(target, "smart")
-end
-
 function PathfindingModule.ExportStatistics()
     return {
         totalPaths = Stats.totalPaths,
@@ -1082,7 +1118,10 @@ function PathfindingModule.ExportStatistics()
         totalPathTime = Stats.totalPathTime,
         deathZones = #State.deathZones,
         pathsRerouted = Stats.pathsRerouted,
-        waypointsSkipped = Stats.waypointsSkipped
+        waypointsSkipped = Stats.waypointsSkipped,
+        raycastingUsed = Stats.raycastingUsed,
+        cliffsAvoided = Stats.cliffsAvoided,
+        visionRecoveries = Stats.visionRecoveries
     }
 end
 
@@ -1102,8 +1141,8 @@ task.spawn(function()
     end
 end)
 
-Log("Smart Pathfinding Module V3.1 (Integrated) loaded successfully!")
-Log("Features: Vision Bridge, Enhanced Stuck Detection (4 methods), 8 Recovery Methods, Dynamic Rerouting")
-Log("Total lines: ~1060 | Max Stuck Attempts: 8 | Velocity-based detection")
+Log("Integrated Pathfinding Module V4 loaded successfully!")
+Log("Features: Raycasting Vision Integration, Smart Navigation, 8 Recovery Methods")
+Log("Total lines: ~1100 | Raycasting: " .. (RaycastingVision and "Connected" or "Awaiting connection"))
 
 return PathfindingModule
