@@ -170,10 +170,10 @@ local function PerformPreNavigationScan(targetPos)
     Log("Performing pre-navigation safety scan...", "INFO")
     
     -- Check if we can see the target
-    local hasLineOfSight, distance = RaycastingVision.CheckLineOfSight(targetPos)
+    local hasLineOfSight, sightInfo = RaycastingVision.CheckLineOfSight(targetPos)
     
-    if hasLineOfSight then
-        Log("Direct line of sight to target! Distance: " .. math.floor(distance) .. " studs", "INFO")
+    if hasLineOfSight and sightInfo then
+        Log("Direct line of sight to target! Distance: " .. math.floor(sightInfo.distance) .. " studs", "INFO")
     end
     
     -- Multi-range scan
@@ -184,10 +184,10 @@ local function PerformPreNavigationScan(targetPos)
     end
     
     -- Check for immediate obstacles
-    local hasObstacle, obstacleHit, obstacleDist = RaycastingVision.CheckObstacleAhead(10)
+    local forwardScan = RaycastingVision.ScanForward(10, 5)
     
-    if hasObstacle and obstacleDist < 3 then
-        Log("Immediate obstacle detected at " .. math.floor(obstacleDist) .. " studs", "WARN")
+    if forwardScan and forwardScan.hasObstacle and forwardScan.minDistance < 3 then
+        Log("Immediate obstacle detected at " .. math.floor(forwardScan.minDistance) .. " studs", "WARN")
         return false, "immediate_obstacle"
     end
     
@@ -738,14 +738,18 @@ end
 
 local function CanSkipToWaypoint(currentPos, targetWaypoint, intermediateWaypoint)
     if HasRaycasting() then
-        local hasLineOfSight = RaycastingVision.CheckLineOfSight(targetWaypoint.Position, currentPos)
+        -- CheckLineOfSight uses player's current position automatically
+        local hasLineOfSight = RaycastingVision.CheckLineOfSight(targetWaypoint.Position)
         if hasLineOfSight then
-            local directDist = GetDistance(currentPos, targetWaypoint.Position)
-            local intermediateDist = GetDistance(currentPos, intermediateWaypoint.Position) + 
-                                     GetDistance(intermediateWaypoint.Position, targetWaypoint.Position)
-            
-            if directDist < intermediateDist * 0.85 then
-                return true
+            local rootPart = GetRootPart()
+            if rootPart then
+                local directDist = GetDistance(rootPart.Position, targetWaypoint.Position)
+                local intermediateDist = GetDistance(rootPart.Position, intermediateWaypoint.Position) + 
+                                         GetDistance(intermediateWaypoint.Position, targetWaypoint.Position)
+                
+                if directDist < intermediateDist * 0.85 then
+                    return true
+                end
             end
         end
     end
