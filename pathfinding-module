@@ -1,15 +1,14 @@
 --[[
-    SMART PATHFINDING MODULE V3
-    Enhanced intelligence and stuck recovery
+    SMART PATHFINDING MODULE V3.1 (Integrated Edition)
+    Comprehensive intelligence and stuck recovery
     
-    NEW FEATURES:
-    - Advanced stuck detection (velocity-based)
-    - 8 recovery methods (not just 4)
+    INTEGRATED FEATURES:
+    - Vision Bridge: Communicates with Raycasting Module for proactive hazard detection.
+    - Advanced stuck detection (velocity-based and oscillation check)
+    - 8 recovery methods for complex environments
     - Obstacle detection and avoidance
-    - Dynamic path regeneration
-    - Waypoint skipping for efficiency
-    - Position history tracking
-    - Smart timeout adjustments
+    - Death learning system with zone reinforcement
+    - Dynamic path regeneration and waypoint skipping
 ]]
 
 local PathfindingModule = {}
@@ -80,6 +79,9 @@ local Stats = {
     pathsRerouted = 0,
     waypointsSkipped = 0
 }
+
+-- 🔗 NEW: Vision Bridge Reference
+PathfindingModule.VisionModule = nil
 
 -- ===================================
 -- UTILITY FUNCTIONS
@@ -200,23 +202,21 @@ end
 
 local function MonitorDeath()
     task.spawn(function()
-        local character = GetCharacter()
-        if not character then
-            character = LocalPlayer.CharacterAdded:Wait()
-        end
-        
-        local humanoid = GetHumanoid()
-        if not humanoid then
-            return
-        end
-        
-        humanoid.Died:Connect(function()
-            local rootPart = GetRootPart()
-            if rootPart and State.isNavigating then
-                AddDeathZone(rootPart.Position)
-                Log("Death detected during navigation - learning from mistake", "ERROR")
+        while true do
+            local character = GetCharacter()
+            if character then
+                local humanoid = GetHumanoid()
+                if humanoid then
+                    humanoid.Died:Wait()
+                    local rootPart = GetRootPart()
+                    if rootPart and State.isNavigating then
+                        AddDeathZone(rootPart.Position)
+                        Log("Death detected during navigation - learning from mistake", "ERROR")
+                    end
+                end
             end
-        end)
+            task.wait(1)
+        end
     end)
 end
 
@@ -500,6 +500,10 @@ local function ExecuteJump(jumpType)
         Log("Gap jump: Single jump with momentum")
         humanoid.Jump = true
         task.wait(0.3)
+    
+    elseif jumpType == "vision_jump" then
+        -- Fast jump triggered by vision module
+        humanoid.Jump = true
         
     else
         -- Normal single jump
@@ -685,6 +689,28 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             State.lastSuccessfulWaypoint = currentPos
             break
         end
+
+        -- ==========================================
+        -- 👁️ NEW: VISION BRIDGE INTEGRATION
+        -- ==========================================
+        if PathfindingModule.VisionModule then
+            local vision = PathfindingModule.VisionModule
+            -- Scan 8 studs ahead for hazards
+            local hasCliff, cliffInfo = vision.DetectCliff(8)
+
+            if hasCliff then
+                local dist = math.floor(cliffInfo.distance or 8)
+                Log("CLIFF DETECTED " .. dist .. " STUDS INFRONT", "WARN")
+                Log("Pathfinding: In " .. dist .. " Studs Jump Over!", "INFO")
+                
+                -- Execute jump if we are within range
+                if dist <= 6 then
+                    ExecuteJump("vision_jump")
+                    task.wait(0.1)
+                end
+            end
+        end
+        -- ==========================================
         
         -- Continuous jump checking (every 0.5 seconds)
         if Config.UseJumpOptimization and not jumpExecuted then
@@ -825,6 +851,11 @@ end
 -- ===================================
 -- MAIN NAVIGATION FUNCTION
 -- ===================================
+
+function PathfindingModule.SetVisionModule(module)
+    PathfindingModule.VisionModule = module
+    Log("Vision module linked to Pathfinding! 👁️")
+end
 
 function PathfindingModule.Navigate(target, mode)
     PathfindingModule.Stop()
@@ -1071,8 +1102,8 @@ task.spawn(function()
     end
 end)
 
-Log("Smart Pathfinding Module V3 loaded successfully!")
-Log("Features: Enhanced Stuck Detection (4 methods), 8 Recovery Methods, Dynamic Rerouting, Obstacle Avoidance")
-Log("Total lines: ~1050 | Max Stuck Attempts: 8 | Velocity-based detection")
+Log("Smart Pathfinding Module V3.1 (Integrated) loaded successfully!")
+Log("Features: Vision Bridge, Enhanced Stuck Detection (4 methods), 8 Recovery Methods, Dynamic Rerouting")
+Log("Total lines: ~1060 | Max Stuck Attempts: 8 | Velocity-based detection")
 
 return PathfindingModule
