@@ -26,7 +26,7 @@ local Config = {
     MaxPathDistance = 500,
     PathTimeout = 30,
     JumpCheckDistance = 8,
-    JumpHeight = 7,
+    JumpHeight = 4, -- Lowered from 7 for better detection
     StuckTimeout = 2, -- Reduced from 3
     StuckDistance = 1.5, -- Reduced from 2
     MaxStuckAttempts = 8, -- Increased from 3
@@ -251,10 +251,12 @@ end
 local function CheckJumpRequired(currentPos, nextPos)
     local heightDiff = nextPos.Y - currentPos.Y
     
-    if heightDiff > Config.JumpHeight then
+    -- More reasonable height threshold
+    if heightDiff > 4 then
         return true, "high_jump"
     end
     
+    -- Check for gaps (no ground between)
     local midpoint = (currentPos + nextPos) / 2
     local hasGround = CheckGroundBelow(midpoint, 20)
     
@@ -264,9 +266,15 @@ local function CheckJumpRequired(currentPos, nextPos)
             Vector3.new(nextPos.X, 0, nextPos.Z)
         )
         
-        if distance > 3 then
+        -- Only gap jump for significant gaps
+        if distance > 4 then
             return true, "gap_jump"
         end
+    end
+    
+    -- Check for small elevation (normal jump needed)
+    if heightDiff > 1.5 and heightDiff <= 4 then
+        return true, "normal"
     end
     
     return false, nil
@@ -478,31 +486,31 @@ local function ExecuteJump(jumpType)
     Stats.jumpsExecuted = Stats.jumpsExecuted + 1
     
     if jumpType == "high_jump" then
-        for i = 1, 3 do
-            humanoid.Jump = true
-            task.wait(0.1)
-        end
-        
-        local bodyVelocity = Instance.new("BodyVelocity")
-        bodyVelocity.MaxForce = Vector3.new(0, 8000, 0)
-        bodyVelocity.Velocity = Vector3.new(0, 60, 0)
-        bodyVelocity.Parent = rootPart
+        -- Natural high jump - just double jump
+        humanoid.Jump = true
+        task.wait(0.15)
+        humanoid.Jump = true
+        task.wait(0.15)
+        humanoid.Jump = true
         task.wait(0.3)
-        bodyVelocity:Destroy()
         
     elseif jumpType == "gap_jump" then
+        -- Natural gap jump with slight boost
         humanoid.Jump = true
-        local direction = rootPart.CFrame.LookVector
+        task.wait(0.05)
         
+        local direction = rootPart.CFrame.LookVector
         local bodyVelocity = Instance.new("BodyVelocity")
-        bodyVelocity.MaxForce = Vector3.new(4000, 4000, 4000)
-        bodyVelocity.Velocity = (direction * 30) + Vector3.new(0, 40, 0)
+        bodyVelocity.MaxForce = Vector3.new(2000, 2000, 2000)
+        bodyVelocity.Velocity = (direction * 20) + Vector3.new(0, 25, 0)
         bodyVelocity.Parent = rootPart
-        task.wait(0.4)
+        task.wait(0.25)
         bodyVelocity:Destroy()
+        
     else
+        -- Normal jump
         humanoid.Jump = true
-        task.wait(0.2)
+        task.wait(0.15)
     end
     
     return true
@@ -646,18 +654,11 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
     
     CreateWaypointMarker(waypointPos, Config.WaypointColor)
     
-    if waypoint.Action == Enum.PathWaypointAction.Jump then
-        Log("Jump waypoint detected")
-        ExecuteJump("normal")
-        task.wait(0.3)
-    end
-    
-    if Config.UseJumpOptimization then
-        local needsJump, jumpType = CheckJumpRequired(rootPart.Position, waypointPos)
-        if needsJump then
-            ExecuteJump(jumpType)
-            task.wait(0.5)
-        end
+    -- Only use PathfindingService jump detection if custom optimization is OFF
+    if waypoint.Action == Enum.PathWaypointAction.Jump and not Config.UseJumpOptimization then
+        Log("PathfindingService jump detected")
+        humanoid.Jump = true
+        task.wait(0.2)
     end
     
     humanoid:MoveTo(waypointPos)
@@ -666,6 +667,8 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
     local timeout = 10
     local reached = false
     local checkInterval = 0
+    local lastJumpCheck = 0
+    local jumpExecuted = false
     
     while tick() - startTime < timeout do
         if not State.isNavigating then
@@ -680,6 +683,22 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             reached = true
             State.lastSuccessfulWaypoint = currentPos
             break
+        end
+        
+        -- Continuous jump checking (every 0.5 seconds)
+        if Config.UseJumpOptimization and not jumpExecuted then
+            if tick() - lastJumpCheck >= 0.5 then
+                local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
+                if needsJump then
+                    Log("Jump needed: " .. tostring(jumpType) .. " (distance to waypoint: " .. math.floor(distance) .. ")")
+                    ExecuteJump(jumpType)
+                    jumpExecuted = true
+                    -- Reset move command after jump
+                    task.wait(0.3)
+                    humanoid:MoveTo(waypointPos)
+                end
+                lastJumpCheck = tick()
+            end
         end
         
         -- Smart waypoint skipping
@@ -711,6 +730,9 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
                     return false
                 end
                 RecoverFromStuck(stuckType)
+                -- Reset jump flag after recovery
+                jumpExecuted = false
+                lastJumpCheck = 0
             end
         end
         
