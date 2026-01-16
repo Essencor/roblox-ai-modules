@@ -24,17 +24,22 @@ local LocalPlayer = Players.LocalPlayer
 -- Configuration
 local Config = {
     -- Scanning
-    ForwardScanDistance = 10,
-    ForwardRayCount = 5,
-    CircularScanRadius = 8,
-    CircularRayCount = 16,
-    GroundCheckDistance = 20,
-    CliffDetectionDistance = 5,
+    ForwardScanDistance = 30,      -- Increased from 10
+    ForwardRayCount = 7,           -- Increased from 5 (more rays = better detection)
+    CircularScanRadius = 25,       -- Increased from 8
+    CircularRayCount = 32,         -- Increased from 16 (better 360° coverage)
+    GroundCheckDistance = 50,      -- Increased from 20
+    CliffDetectionDistance = 10,   -- Increased from 5
+    
+    -- Multi-Range Scanning (new)
+    LongRangeScan = 50,            -- Far detection
+    MediumRangeScan = 25,          -- Medium range
+    ShortRangeScan = 10,           -- Close range
     
     -- Performance
-    CacheTimeout = 0.5,
-    MaxRaysPerFrame = 20,
-    UpdateInterval = 0.2,
+    CacheTimeout = 0.3,            -- Reduced from 0.5 for more frequent updates
+    MaxRaysPerFrame = 35,          -- Increased from 20
+    UpdateInterval = 0.15,         -- Reduced from 0.2 for faster updates
     
     -- Detection
     ObstacleMinSize = 1,
@@ -340,6 +345,95 @@ function RaycastingVision.ScanCircular(radius, rayCount)
     State.safeDirections = results.clearDirections
     
     return results
+end
+
+-- ===================================
+-- MULTI-RANGE SCANNING (NEW)
+-- ===================================
+
+function RaycastingVision.ScanMultiRange()
+    local rootPart = GetRootPart()
+    if not rootPart then return nil end
+    
+    local results = {
+        longRange = nil,
+        mediumRange = nil,
+        shortRange = nil,
+        hasObstacles = {
+            long = false,
+            medium = false,
+            short = false
+        },
+        clearestRange = nil
+    }
+    
+    -- Long range scan (50 studs)
+    results.longRange = RaycastingVision.ScanForward(Config.LongRangeScan, 5)
+    results.hasObstacles.long = results.longRange and results.longRange.hasObstacle or false
+    
+    -- Medium range scan (25 studs)
+    results.mediumRange = RaycastingVision.ScanForward(Config.MediumRangeScan, 7)
+    results.hasObstacles.medium = results.mediumRange and results.mediumRange.hasObstacle or false
+    
+    -- Short range scan (10 studs)
+    results.shortRange = RaycastingVision.ScanForward(Config.ShortRangeScan, 7)
+    results.hasObstacles.short = results.shortRange and results.shortRange.hasObstacle or false
+    
+    -- Determine clearest range
+    if not results.hasObstacles.long then
+        results.clearestRange = "long"
+    elseif not results.hasObstacles.medium then
+        results.clearestRange = "medium"
+    elseif not results.hasObstacles.short then
+        results.clearestRange = "short"
+    else
+        results.clearestRange = "none"
+    end
+    
+    Log("Multi-range scan: Long=" .. tostring(not results.hasObstacles.long) .. 
+        " Medium=" .. tostring(not results.hasObstacles.medium) .. 
+        " Short=" .. tostring(not results.hasObstacles.short))
+    
+    return results
+end
+
+function RaycastingVision.GetFarthestClearDistance()
+    local multiScan = RaycastingVision.ScanMultiRange()
+    
+    if not multiScan then return 0 end
+    
+    if not multiScan.hasObstacles.long then
+        return Config.LongRangeScan
+    elseif not multiScan.hasObstacles.medium then
+        return Config.MediumRangeScan
+    elseif not multiScan.hasObstacles.short then
+        return Config.ShortRangeScan
+    end
+    
+    return 0
+end
+
+function RaycastingVision.FindBestPathDistance()
+    local rootPart = GetRootPart()
+    if not rootPart then return nil end
+    
+    local origin = rootPart.Position + Vector3.new(0, 2, 0)
+    local lookDirection = rootPart.CFrame.LookVector
+    
+    -- Binary search for max clear distance
+    local testDistances = {5, 10, 15, 20, 25, 30, 40, 50}
+    local maxClear = 0
+    
+    for _, dist in ipairs(testDistances) do
+        local result = PerformRaycast(origin, lookDirection, dist, false)
+        if not result then
+            maxClear = dist
+        else
+            break
+        end
+    end
+    
+    return maxClear
 end
 
 -- ===================================
