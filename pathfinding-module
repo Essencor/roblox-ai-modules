@@ -38,7 +38,7 @@ local Config = {
     PathColor = Color3.new(0, 1, 0),
     WaypointColor = Color3.new(1, 1, 0),
     UseSmartPathing = true,
-    UseJumpOptimization = true,
+    UseJumpOptimization = false, -- Changed to false by default - let PathfindingService handle it
     UseStuckRecovery = true,
     UseDynamicRerouting = true,
     UseObstacleDetection = true,
@@ -251,8 +251,8 @@ end
 local function CheckJumpRequired(currentPos, nextPos)
     local heightDiff = nextPos.Y - currentPos.Y
     
-    -- More reasonable height threshold
-    if heightDiff > 4 then
+    -- Only trigger high jump for significant height
+    if heightDiff > 5 then
         return true, "high_jump"
     end
     
@@ -267,13 +267,13 @@ local function CheckJumpRequired(currentPos, nextPos)
         )
         
         -- Only gap jump for significant gaps
-        if distance > 4 then
+        if distance > 5 then
             return true, "gap_jump"
         end
     end
     
-    -- Check for small elevation (normal jump needed)
-    if heightDiff > 1.5 and heightDiff <= 4 then
+    -- Check for medium elevation (normal jump needed)
+    if heightDiff > 2 and heightDiff <= 5 then
         return true, "normal"
     end
     
@@ -486,31 +486,26 @@ local function ExecuteJump(jumpType)
     Stats.jumpsExecuted = Stats.jumpsExecuted + 1
     
     if jumpType == "high_jump" then
-        -- Natural high jump - just double jump
+        -- Multiple jumps for high obstacles
+        Log("High jump: Triple jump sequence")
         humanoid.Jump = true
-        task.wait(0.15)
+        task.wait(0.2)
         humanoid.Jump = true
-        task.wait(0.15)
+        task.wait(0.2)
         humanoid.Jump = true
         task.wait(0.3)
         
     elseif jumpType == "gap_jump" then
-        -- Natural gap jump with slight boost
+        -- Single powerful jump for gaps
+        Log("Gap jump: Single jump with momentum")
         humanoid.Jump = true
-        task.wait(0.05)
-        
-        local direction = rootPart.CFrame.LookVector
-        local bodyVelocity = Instance.new("BodyVelocity")
-        bodyVelocity.MaxForce = Vector3.new(2000, 2000, 2000)
-        bodyVelocity.Velocity = (direction * 20) + Vector3.new(0, 25, 0)
-        bodyVelocity.Parent = rootPart
-        task.wait(0.25)
-        bodyVelocity:Destroy()
+        task.wait(0.3)
         
     else
-        -- Normal jump
+        -- Normal single jump
+        Log("Normal jump: Single hop")
         humanoid.Jump = true
-        task.wait(0.15)
+        task.wait(0.2)
     end
     
     return true
@@ -654,11 +649,17 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
     
     CreateWaypointMarker(waypointPos, Config.WaypointColor)
     
-    -- Only use PathfindingService jump detection if custom optimization is OFF
-    if waypoint.Action == Enum.PathWaypointAction.Jump and not Config.UseJumpOptimization then
-        Log("PathfindingService jump detected")
-        humanoid.Jump = true
-        task.wait(0.2)
+    -- Handle jump waypoints
+    if waypoint.Action == Enum.PathWaypointAction.Jump then
+        if Config.UseJumpOptimization then
+            Log("PathfindingService jump - using custom jump")
+            ExecuteJump("normal")
+            task.wait(0.2)
+        else
+            Log("PathfindingService jump - using simple jump")
+            humanoid.Jump = true
+            task.wait(0.2)
+        end
     end
     
     humanoid:MoveTo(waypointPos)
@@ -964,13 +965,14 @@ local Profiles = {
         WaypointSpacing = 6,
         StuckTimeout = 1.5,
         UseSmartPathing = false,
-        UseDynamicRerouting = false
+        UseDynamicRerouting = false,
+        UseJumpOptimization = false
     },
     Precise = {
         WaypointSpacing = 2,
         StuckTimeout = 2,
         UseSmartPathing = true,
-        UseJumpOptimization = true,
+        UseJumpOptimization = false,
         UseDynamicRerouting = true
     },
     Safe = {
@@ -979,11 +981,12 @@ local Profiles = {
         UseStuckRecovery = true,
         MaxStuckAttempts = 8,
         UseDynamicRerouting = true,
-        UseObstacleDetection = true
+        UseObstacleDetection = true,
+        UseJumpOptimization = false
     },
     Obby = {
         WaypointSpacing = 3,
-        UseJumpOptimization = true,
+        UseJumpOptimization = true,  -- Only enable for obby mode
         ShowWaypoints = true,
         ShowPath = true,
         StuckTimeout = 1.5,
