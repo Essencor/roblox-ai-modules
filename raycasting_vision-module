@@ -1,1 +1,757 @@
+--[[
+    RAYCASTING VISION MODULE
+    Comprehensive scanning and obstacle detection system
+    
+    Features:
+    - Forward obstacle detection (multi-ray)
+    - 360° circular scanning
+    - Ground detection and cliff prevention
+    - Line of sight checking
+    - Terrain height profiling
+    - Killbrick and hazard detection
+    - Water/lava detection
+    - Dynamic obstacle avoidance
+    - Smart path prediction
+    - Performance optimized with caching
+]]
 
+local RaycastingVision = {}
+
+-- Services
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- Configuration
+local Config = {
+    -- Scanning
+    ForwardScanDistance = 10,
+    ForwardRayCount = 5,
+    CircularScanRadius = 8,
+    CircularRayCount = 16,
+    GroundCheckDistance = 20,
+    CliffDetectionDistance = 5,
+    
+    -- Performance
+    CacheTimeout = 0.5,
+    MaxRaysPerFrame = 20,
+    UpdateInterval = 0.2,
+    
+    -- Detection
+    ObstacleMinSize = 1,
+    CliffMinHeight = 4,
+    WaterDetection = true,
+    LavaDetection = true,
+    KillbrickDetection = true,
+    
+    -- Visualization
+    ShowRays = false,
+    ShowObstacles = false,
+    ShowSafeZones = false,
+    RayColor = Color3.new(0, 1, 1),
+    ObstacleColor = Color3.new(1, 0, 0),
+    SafeColor = Color3.new(0, 1, 0)
+}
+
+-- State
+local State = {
+    lastScanTime = 0,
+    raycastCache = {},
+    detectedObstacles = {},
+    safeDirections = {},
+    terrainProfile = {},
+    visualizations = {}
+}
+
+-- Statistics
+local Stats = {
+    totalRaycasts = 0,
+    cachedHits = 0,
+    obstaclesDetected = 0,
+    cliffsDetected = 0,
+    hazardsDetected = 0
+}
+
+-- ===================================
+-- UTILITY FUNCTIONS
+-- ===================================
+
+local function Log(message, level)
+    level = level or "INFO"
+    print("[RaycastVision:" .. level .. "] " .. tostring(message))
+end
+
+local function GetCharacter()
+    return LocalPlayer.Character
+end
+
+local function GetRootPart()
+    local character = GetCharacter()
+    return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetDistance(pos1, pos2)
+    return (pos1 - pos2).Magnitude
+end
+
+local function CreateCacheKey(origin, direction, distance)
+    return tostring(math.floor(origin.X)) .. "," .. tostring(math.floor(origin.Y)) .. "," .. tostring(math.floor(origin.Z)) .. "_" ..
+           tostring(math.floor(direction.X * 100)) .. "," .. tostring(math.floor(direction.Y * 100)) .. "," .. tostring(math.floor(direction.Z * 100)) .. "_" ..
+           tostring(math.floor(distance))
+end
+
+-- ===================================
+-- VISUALIZATION
+-- ===================================
+
+local function ClearVisualizations()
+    for _, visual in ipairs(State.visualizations) do
+        if visual and visual.Parent then
+            visual:Destroy()
+        end
+    end
+    State.visualizations = {}
+end
+
+local function VisualizeRay(origin, direction, distance, hit, color)
+    if not Config.ShowRays then return end
+    
+    local endPos = origin + (direction * distance)
+    if hit then
+        endPos = hit.Position
+    end
+    
+    local rayLength = (endPos - origin).Magnitude
+    local midpoint = (origin + endPos) / 2
+    
+    local part = Instance.new("Part")
+    part.Size = Vector3.new(0.1, 0.1, rayLength)
+    part.CFrame = CFrame.new(midpoint, endPos)
+    part.Anchored = true
+    part.CanCollide = false
+    part.Color = color or Config.RayColor
+    part.Material = Enum.Material.Neon
+    part.Transparency = 0.7
+    part.Parent = workspace
+    
+    table.insert(State.visualizations, part)
+    
+    task.delay(0.5, function()
+        if part and part.Parent then
+            part:Destroy()
+        end
+    end)
+end
+
+local function VisualizeObstacle(position, size)
+    if not Config.ShowObstacles then return end
+    
+    local marker = Instance.new("Part")
+    marker.Size = size or Vector3.new(2, 2, 2)
+    marker.Position = position
+    marker.Anchored = true
+    marker.CanCollide = false
+    marker.Color = Config.ObstacleColor
+    marker.Material = Enum.Material.Neon
+    marker.Transparency = 0.5
+    marker.Parent = workspace
+    
+    table.insert(State.visualizations, marker)
+    
+    task.delay(2, function()
+        if marker and marker.Parent then
+            marker:Destroy()
+        end
+    end)
+end
+
+-- ===================================
+-- CORE RAYCASTING
+-- ===================================
+
+local function PerformRaycast(origin, direction, distance, useCache)
+    useCache = useCache == nil and true or useCache
+    
+    -- Check cache
+    if useCache then
+        local cacheKey = CreateCacheKey(origin, direction, distance)
+        local cached = State.raycastCache[cacheKey]
+        if cached and (tick() - cached.time) < Config.CacheTimeout then
+            Stats.cachedHits = Stats.cachedHits + 1
+            return cached.result
+        end
+    end
+    
+    -- Create raycast params
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    local character = GetCharacter()
+    if character then
+        raycastParams.FilterDescendantsInstances = {character}
+    end
+    raycastParams.IgnoreWater = not Config.WaterDetection
+    
+    -- Perform raycast
+    local result = workspace:Raycast(origin, direction * distance, raycastParams)
+    Stats.totalRaycasts = Stats.totalRaycasts + 1
+    
+    -- Cache result
+    if useCache then
+        local cacheKey = CreateCacheKey(origin, direction, distance)
+        State.raycastCache[cacheKey] = {
+            result = result,
+            time = tick()
+        }
+    end
+    
+    return result
+end
+
+-- ===================================
+-- FORWARD SCANNING
+-- ===================================
+
+function RaycastingVision.ScanForward(distance, rayCount)
+    distance = distance or Config.ForwardScanDistance
+    rayCount = rayCount or Config.ForwardRayCount
+    
+    local rootPart = GetRootPart()
+    if not rootPart then return nil end
+    
+    local origin = rootPart.Position + Vector3.new(0, 2, 0)
+    local lookDirection = rootPart.CFrame.LookVector
+    local rightDirection = rootPart.CFrame.RightVector
+    
+    local results = {
+        hasObstacle = false,
+        obstacles = {},
+        clearDirections = {},
+        minDistance = distance
+    }
+    
+    -- Center ray
+    local centerRay = PerformRaycast(origin, lookDirection, distance)
+    VisualizeRay(origin, lookDirection, distance, centerRay, Color3.new(0, 1, 1))
+    
+    if centerRay then
+        results.hasObstacle = true
+        results.minDistance = math.min(results.minDistance, (centerRay.Position - origin).Magnitude)
+        table.insert(results.obstacles, {
+            position = centerRay.Position,
+            normal = centerRay.Normal,
+            instance = centerRay.Instance,
+            distance = (centerRay.Position - origin).Magnitude
+        })
+        VisualizeObstacle(centerRay.Position, Vector3.new(1, 1, 1))
+    else
+        table.insert(results.clearDirections, "forward")
+    end
+    
+    -- Left and right rays
+    local spreadAngle = 30
+    for i = 1, math.floor(rayCount / 2) do
+        local angle = math.rad(spreadAngle * i / math.floor(rayCount / 2))
+        
+        -- Left ray
+        local leftDir = (lookDirection * math.cos(angle) - rightDirection * math.sin(angle)).Unit
+        local leftRay = PerformRaycast(origin, leftDir, distance)
+        VisualizeRay(origin, leftDir, distance, leftRay, Color3.new(0, 1, 0.5))
+        
+        if leftRay then
+            results.hasObstacle = true
+            results.minDistance = math.min(results.minDistance, (leftRay.Position - origin).Magnitude)
+            table.insert(results.obstacles, {
+                position = leftRay.Position,
+                normal = leftRay.Normal,
+                instance = leftRay.Instance,
+                distance = (leftRay.Position - origin).Magnitude,
+                direction = "left"
+            })
+        else
+            table.insert(results.clearDirections, "left")
+        end
+        
+        -- Right ray
+        local rightDir = (lookDirection * math.cos(angle) + rightDirection * math.sin(angle)).Unit
+        local rightRay = PerformRaycast(origin, rightDir, distance)
+        VisualizeRay(origin, rightDir, distance, rightRay, Color3.new(0.5, 1, 0))
+        
+        if rightRay then
+            results.hasObstacle = true
+            results.minDistance = math.min(results.minDistance, (rightRay.Position - origin).Magnitude)
+            table.insert(results.obstacles, {
+                position = rightRay.Position,
+                normal = rightRay.Normal,
+                instance = rightRay.Instance,
+                distance = (rightRay.Position - origin).Magnitude,
+                direction = "right"
+            })
+        else
+            table.insert(results.clearDirections, "right")
+        end
+    end
+    
+    Stats.obstaclesDetected = Stats.obstaclesDetected + #results.obstacles
+    
+    return results
+end
+
+-- ===================================
+-- 360° CIRCULAR SCANNING
+-- ===================================
+
+function RaycastingVision.ScanCircular(radius, rayCount)
+    radius = radius or Config.CircularScanRadius
+    rayCount = rayCount or Config.CircularRayCount
+    
+    local rootPart = GetRootPart()
+    if not rootPart then return nil end
+    
+    local origin = rootPart.Position + Vector3.new(0, 2, 0)
+    
+    local results = {
+        obstacles = {},
+        clearDirections = {},
+        obstacleMap = {}
+    }
+    
+    for i = 0, rayCount - 1 do
+        local angle = (math.pi * 2 / rayCount) * i
+        local direction = Vector3.new(math.cos(angle), 0, math.sin(angle))
+        
+        local rayResult = PerformRaycast(origin, direction, radius)
+        VisualizeRay(origin, direction, radius, rayResult, Color3.new(1, 1, 0))
+        
+        if rayResult then
+            table.insert(results.obstacles, {
+                position = rayResult.Position,
+                normal = rayResult.Normal,
+                instance = rayResult.Instance,
+                angle = math.deg(angle),
+                distance = (rayResult.Position - origin).Magnitude
+            })
+            results.obstacleMap[math.floor(math.deg(angle))] = true
+        else
+            table.insert(results.clearDirections, math.deg(angle))
+            results.obstacleMap[math.floor(math.deg(angle))] = false
+        end
+    end
+    
+    State.detectedObstacles = results.obstacles
+    State.safeDirections = results.clearDirections
+    
+    return results
+end
+
+-- ===================================
+-- GROUND DETECTION
+-- ===================================
+
+function RaycastingVision.CheckGround(position, maxDistance)
+    position = position or (GetRootPart() and GetRootPart().Position)
+    if not position then return false, nil end
+    
+    maxDistance = maxDistance or Config.GroundCheckDistance
+    
+    local origin = position
+    local direction = Vector3.new(0, -1, 0)
+    
+    local result = PerformRaycast(origin, direction, maxDistance)
+    
+    if result then
+        return true, {
+            position = result.Position,
+            distance = (result.Position - origin).Magnitude,
+            material = result.Material,
+            instance = result.Instance
+        }
+    end
+    
+    return false, nil
+end
+
+function RaycastingVision.CheckGroundAhead(distance, checkDistance)
+    distance = distance or 5
+    checkDistance = checkDistance or Config.GroundCheckDistance
+    
+    local rootPart = GetRootPart()
+    if not rootPart then return false, nil end
+    
+    local forwardPos = rootPart.Position + (rootPart.CFrame.LookVector * distance)
+    
+    return RaycastingVision.CheckGround(forwardPos, checkDistance)
+end
+
+function RaycastingVision.DetectCliff(distance)
+    distance = distance or Config.CliffDetectionDistance
+    
+    local hasGround, groundInfo = RaycastingVision.CheckGroundAhead(distance, 20)
+    
+    if not hasGround then
+        Stats.cliffsDetected = Stats.cliffsDetected + 1
+        Log("Cliff detected ahead! (distance: " .. distance .. ")", "WARN")
+        return true, {
+            distance = distance,
+            type = "void"
+        }
+    end
+    
+    local rootPart = GetRootPart()
+    if groundInfo and rootPart then
+        local heightDiff = rootPart.Position.Y - groundInfo.position.Y
+        if heightDiff > Config.CliffMinHeight then
+            Stats.cliffsDetected = Stats.cliffsDetected + 1
+            Log("Cliff detected! Height drop: " .. math.floor(heightDiff) .. " studs", "WARN")
+            return true, {
+                distance = distance,
+                heightDrop = heightDiff,
+                type = "drop"
+            }
+        end
+    end
+    
+    return false, nil
+end
+
+-- ===================================
+-- LINE OF SIGHT
+-- ===================================
+
+function RaycastingVision.CheckLineOfSight(targetPos)
+    local rootPart = GetRootPart()
+    if not rootPart then return false end
+    
+    local origin = rootPart.Position + Vector3.new(0, 2, 0)
+    local direction = (targetPos - origin).Unit
+    local distance = GetDistance(origin, targetPos)
+    
+    local result = PerformRaycast(origin, direction, distance, false)
+    
+    VisualizeRay(origin, direction, distance, result, result and Color3.new(1, 0, 0) or Color3.new(0, 1, 0))
+    
+    if not result then
+        return true, {
+            distance = distance,
+            clear = true
+        }
+    end
+    
+    -- Check if hit is very close to target (within 2 studs)
+    local hitDistance = (result.Position - targetPos).Magnitude
+    if hitDistance < 2 then
+        return true, {
+            distance = distance,
+            clear = true,
+            hitTarget = true
+        }
+    end
+    
+    return false, {
+        distance = (result.Position - origin).Magnitude,
+        obstacle = result.Instance,
+        obstructionPoint = result.Position
+    }
+end
+
+-- ===================================
+-- TERRAIN PROFILING
+-- ===================================
+
+function RaycastingVision.ProfileTerrain(startPos, endPos, samples)
+    samples = samples or 10
+    
+    local profile = {
+        heights = {},
+        avgHeight = 0,
+        maxHeight = -999999,
+        minHeight = 999999,
+        slope = 0,
+        obstacles = 0
+    }
+    
+    local totalHeight = 0
+    
+    for i = 0, samples do
+        local t = i / samples
+        local samplePos = startPos:Lerp(endPos, t)
+        
+        local hasGround, groundInfo = RaycastingVision.CheckGround(samplePos, 30)
+        
+        if hasGround and groundInfo then
+            local height = groundInfo.position.Y
+            table.insert(profile.heights, height)
+            
+            totalHeight = totalHeight + height
+            profile.maxHeight = math.max(profile.maxHeight, height)
+            profile.minHeight = math.min(profile.minHeight, height)
+        else
+            profile.obstacles = profile.obstacles + 1
+        end
+    end
+    
+    if #profile.heights > 0 then
+        profile.avgHeight = totalHeight / #profile.heights
+        profile.slope = profile.maxHeight - profile.minHeight
+    end
+    
+    State.terrainProfile = profile
+    
+    return profile
+end
+
+-- ===================================
+-- HAZARD DETECTION
+-- ===================================
+
+local function IsKillbrick(instance)
+    if not instance then return false end
+    
+    -- Check for common killbrick indicators
+    local name = instance.Name:lower()
+    if name:find("kill") or name:find("death") or name:find("lava") or name:find("void") then
+        return true
+    end
+    
+    return false
+end
+
+local function IsWater(instance, material)
+    if not Config.WaterDetection then return false end
+    
+    if material == Enum.Material.Water then
+        return true
+    end
+    
+    if instance and instance.Name:lower():find("water") then
+        return true
+    end
+    
+    return false
+end
+
+local function IsLava(instance)
+    if not Config.LavaDetection then return false end
+    
+    if instance then
+        local name = instance.Name:lower()
+        if name:find("lava") or name:find("magma") then
+            return true
+        end
+        
+        -- Check color (reddish = lava)
+        if instance:IsA("BasePart") then
+            local color = instance.Color
+            if color.R > 0.8 and color.G < 0.3 and color.B < 0.3 then
+                return true
+            end
+        end
+    end
+    
+    return false
+end
+
+function RaycastingVision.DetectHazards(scanRadius)
+    scanRadius = scanRadius or 10
+    
+    local hazards = {
+        killbricks = {},
+        water = {},
+        lava = {},
+        total = 0
+    }
+    
+    local circularScan = RaycastingVision.ScanCircular(scanRadius, 12)
+    
+    if circularScan then
+        for _, obstacle in ipairs(circularScan.obstacles) do
+            if Config.KillbrickDetection and IsKillbrick(obstacle.instance) then
+                table.insert(hazards.killbricks, obstacle)
+                hazards.total = hazards.total + 1
+            end
+            
+            if IsWater(obstacle.instance, obstacle.instance and obstacle.instance.Material) then
+                table.insert(hazards.water, obstacle)
+                hazards.total = hazards.total + 1
+            end
+            
+            if IsLava(obstacle.instance) then
+                table.insert(hazards.lava, obstacle)
+                hazards.total = hazards.total + 1
+            end
+        end
+    end
+    
+    if hazards.total > 0 then
+        Stats.hazardsDetected = Stats.hazardsDetected + hazards.total
+        Log("Detected " .. hazards.total .. " hazards nearby", "WARN")
+    end
+    
+    return hazards
+end
+
+-- ===================================
+-- SMART PATH PREDICTION
+-- ===================================
+
+function RaycastingVision.FindBestDirection(targetPos)
+    local rootPart = GetRootPart()
+    if not rootPart then return nil end
+    
+    local currentPos = rootPart.Position
+    local directDirection = (targetPos - currentPos).Unit
+    
+    -- Check direct path
+    local hasLOS, losInfo = RaycastingVision.CheckLineOfSight(targetPos)
+    if hasLOS then
+        return {
+            direction = directDirection,
+            type = "direct",
+            distance = GetDistance(currentPos, targetPos),
+            clear = true
+        }
+    end
+    
+    -- Scan for alternative paths
+    local circularScan = RaycastingVision.ScanCircular(8, 16)
+    
+    if not circularScan or #circularScan.clearDirections == 0 then
+        return nil
+    end
+    
+    -- Find closest clear direction to target
+    local targetAngle = math.deg(math.atan2(directDirection.Z, directDirection.X))
+    local bestAngle = nil
+    local minAngleDiff = 180
+    
+    for _, clearAngle in ipairs(circularScan.clearDirections) do
+        local angleDiff = math.abs(targetAngle - clearAngle)
+        if angleDiff > 180 then
+            angleDiff = 360 - angleDiff
+        end
+        
+        if angleDiff < minAngleDiff then
+            minAngleDiff = angleDiff
+            bestAngle = clearAngle
+        end
+    end
+    
+    if bestAngle then
+        local radAngle = math.rad(bestAngle)
+        local direction = Vector3.new(math.cos(radAngle), 0, math.sin(radAngle))
+        
+        return {
+            direction = direction,
+            type = "alternate",
+            angle = bestAngle,
+            angleDiff = minAngleDiff,
+            clear = true
+        }
+    end
+    
+    return nil
+end
+
+-- ===================================
+-- OBSTACLE AVOIDANCE
+-- ===================================
+
+function RaycastingVision.GetAvoidanceVector()
+    local forwardScan = RaycastingVision.ScanForward(5, 5)
+    
+    if not forwardScan or not forwardScan.hasObstacle then
+        return Vector3.new(0, 0, 0)
+    end
+    
+    local rootPart = GetRootPart()
+    if not rootPart then return Vector3.new(0, 0, 0) end
+    
+    local avoidanceVector = Vector3.new(0, 0, 0)
+    
+    for _, obstacle in ipairs(forwardScan.obstacles) do
+        local toObstacle = (obstacle.position - rootPart.Position).Unit
+        local repulsion = -toObstacle * (1 / (obstacle.distance + 0.1))
+        avoidanceVector = avoidanceVector + repulsion
+    end
+    
+    -- Check if left or right is clearer
+    local hasLeft = false
+    local hasRight = false
+    
+    for _, dir in ipairs(forwardScan.clearDirections) do
+        if dir == "left" then hasLeft = true end
+        if dir == "right" then hasRight = true end
+    end
+    
+    if hasLeft and not hasRight then
+        avoidanceVector = avoidanceVector - rootPart.CFrame.RightVector * 2
+    elseif hasRight and not hasLeft then
+        avoidanceVector = avoidanceVector + rootPart.CFrame.RightVector * 2
+    end
+    
+    return avoidanceVector.Unit
+end
+
+-- ===================================
+-- CONTROL FUNCTIONS
+-- ===================================
+
+function RaycastingVision.ClearCache()
+    State.raycastCache = {}
+    Log("Raycast cache cleared")
+end
+
+function RaycastingVision.SetConfig(key, value)
+    if Config[key] ~= nil then
+        Config[key] = value
+        Log("Config updated: " .. key .. " = " .. tostring(value))
+        return true
+    end
+    return false
+end
+
+function RaycastingVision.GetConfig()
+    return Config
+end
+
+function RaycastingVision.GetStatistics()
+    return {
+        totalRaycasts = Stats.totalRaycasts,
+        cachedHits = Stats.cachedHits,
+        cacheEfficiency = Stats.totalRaycasts > 0 and (Stats.cachedHits / Stats.totalRaycasts * 100) or 0,
+        obstaclesDetected = Stats.obstaclesDetected,
+        cliffsDetected = Stats.cliffsDetected,
+        hazardsDetected = Stats.hazardsDetected
+    }
+end
+
+function RaycastingVision.GetDetectedObstacles()
+    return State.detectedObstacles
+end
+
+function RaycastingVision.GetSafeDirections()
+    return State.safeDirections
+end
+
+function RaycastingVision.EnableVisualization(rayVis, obstacleVis, safeVis)
+    Config.ShowRays = rayVis == nil and true or rayVis
+    Config.ShowObstacles = obstacleVis == nil and true or obstacleVis
+    Config.ShowSafeZones = safeVis == nil and true or safeVis
+    Log("Visualization enabled")
+end
+
+function RaycastingVision.DisableVisualization()
+    Config.ShowRays = false
+    Config.ShowObstacles = false
+    Config.ShowSafeZones = false
+    ClearVisualizations()
+    Log("Visualization disabled")
+end
+
+-- ===================================
+-- INITIALIZATION
+-- ===================================
+
+Log("Raycasting Vision Module loaded successfully!")
+Log("Features: Forward Scan, 360° Scan, Ground Detection, LOS, Terrain Profile, Hazard Detection")
+Log("Performance: Caching enabled, " .. Config.MaxRaysPerFrame .. " max rays/frame")
+
+return RaycastingVision
