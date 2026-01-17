@@ -193,13 +193,32 @@ local function PerformPreNavigationScan(targetPos)
             -- Don't block navigation, just warn
         end
         
-        -- Check for cliffs
+        -- IMPROVED: Check for cliffs at multiple distances ahead
         if Config.CliffAvoidance then
-            local hasCliff, cliffInfo = RaycastingVision.DetectCliff(10)
-            if hasCliff then
-                Stats.cliffsAvoided = Stats.cliffsAvoided + 1
-                Log("Cliff detected ahead! Type: " .. (cliffInfo and cliffInfo.type or "unknown"), "WARN")
-                -- Don't block navigation, pathfinding can handle it
+            local rootPart = GetRootPart()
+            if rootPart then
+                local currentPos = rootPart.Position
+                local directionToTarget = (targetPos - currentPos).Unit
+                
+                -- Check 5 points along path to target: 2, 4, 6, 8, 10 studs
+                local cliffDetected = false
+                for checkDist = 2, 10, 2 do
+                    local checkPoint = currentPos + (directionToTarget * checkDist)
+                    
+                    -- Check if there's ground below this point
+                    local hasGround = RaycastingVision.CheckGround(checkPoint, 20)
+                    
+                    if not hasGround then
+                        Stats.cliffsAvoided = Stats.cliffsAvoided + 1
+                        Log("Cliff detected " .. checkDist .. " studs ahead on path to target!", "WARN")
+                        cliffDetected = true
+                        break
+                    end
+                end
+                
+                if cliffDetected then
+                    Log("Cliff on path - pathfinding will navigate around it", "INFO")
+                end
             end
         end
     end)
@@ -232,13 +251,26 @@ local function PerformContinuousScan()
             return false
         end
         
-        -- Check for cliffs
+        -- IMPROVED: Check for cliffs at multiple distances (not just one point!)
         if Config.CliffAvoidance then
-            local hasCliff = RaycastingVision.DetectCliff(5)
-            if hasCliff then
-                Stats.cliffsAvoided = Stats.cliffsAvoided + 1
-                Log("Cliff detected during navigation!", "WARN")
-                return false
+            local rootPart = GetRootPart()
+            if rootPart then
+                local currentPos = rootPart.Position
+                local lookDirection = rootPart.CFrame.LookVector
+                
+                -- Check 3 points ahead: 2 studs, 4 studs, and 6 studs
+                for checkDist = 2, 6, 2 do
+                    local checkPoint = currentPos + (lookDirection * checkDist)
+                    
+                    -- Check if there's ground below this point
+                    local hasGround = RaycastingVision.CheckGround(checkPoint, 20)
+                    
+                    if not hasGround then
+                        Stats.cliffsAvoided = Stats.cliffsAvoided + 1
+                        Log("Cliff detected " .. checkDist .. " studs ahead during navigation!", "WARN")
+                        return false
+                    end
+                end
             end
         end
         
@@ -651,18 +683,35 @@ local function CheckJumpRequired(currentPos, nextPos)
         return true, "normal"
     end
     
-    -- Use raycasting for gap detection if available
+    -- IMPROVED: Check multiple points along path for gaps/cliffs
     if HasRaycasting() then
-        local midpoint = (currentPos + nextPos) / 2
-        local hasGround = RaycastingVision.CheckGround(midpoint, 20)
+        local directionToNext = (nextPos - currentPos).Unit
+        local distanceToNext = GetDistance(currentPos, nextPos)
+        local checkDistance = math.min(distanceToNext, 10)
         
-        if not hasGround then
-            local distance = GetDistance(
+        -- Check 5 points along the path (not just the midpoint!)
+        local numChecks = 5
+        local hasGap = false
+        
+        for i = 1, numChecks do
+            local checkPoint = currentPos + (directionToNext * (checkDistance * i / numChecks))
+            local hasGround = RaycastingVision.CheckGround(checkPoint, 20)
+            
+            if not hasGround then
+                -- Found a gap at this point!
+                hasGap = true
+                Log("⚠️ Gap detected at " .. math.floor(checkDistance * i / numChecks) .. " studs ahead", "WARN")
+                break
+            end
+        end
+        
+        if hasGap then
+            local horizontalDist = GetDistance(
                 Vector3.new(currentPos.X, 0, currentPos.Z),
                 Vector3.new(nextPos.X, 0, nextPos.Z)
             )
             
-            if distance > 4 then  -- Lowered from 5 for earlier detection
+            if horizontalDist > 4 then
                 return true, "gap_jump"
             end
         end
