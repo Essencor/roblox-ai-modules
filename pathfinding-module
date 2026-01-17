@@ -32,9 +32,9 @@ local Config = {
     PathTimeout = 30,
     JumpCheckDistance = 8,
     JumpHeight = 5,
-    StuckTimeout = 2,
-    StuckDistance = 1.5,
-    MaxStuckAttempts = 8,
+    StuckTimeout = 3,  -- Give more time before detecting stuck (was 2)
+    StuckDistance = 0.8,  -- Only stuck if barely moving (was 1.5)
+    MaxStuckAttempts = 20,  -- Allow many recovery attempts (was 8)
     DeathRadius = 10,
     MaxDeathZones = 50,
     WaypointReachedDistance = 3,  -- Strict - must be close
@@ -48,7 +48,7 @@ local Config = {
     UseStuckRecovery = true,
     UseDynamicRerouting = true,
     UseObstacleDetection = true,
-    MaxRetries = 3,
+    MaxRetries = 10,  -- Much more persistent (was 3)
     VelocityCheckInterval = 0.5,
     MinVelocity = 0.5,
     WaypointSkipDistance = 6,
@@ -885,8 +885,25 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
         if distance <= reachedDistance then
             reached = true
             State.lastSuccessfulWaypoint = currentPos
+            
+            -- Reward progress: reduce stuck count on successful waypoint
+            if State.stuckCount > 0 then
+                State.stuckCount = math.max(0, State.stuckCount - 2)
+                Log("Progress rewarded! Stuck count reduced to " .. State.stuckCount)
+            end
+            
             Log("✓ Waypoint " .. waypointIndex .. " reached! (distance: " .. math.floor(distance) .. " studs)", "INFO")
             break
+        end
+        
+        -- Reduce stuck count when making good progress (getting closer)
+        if closestDistance > 0 and distance < closestDistance * 0.7 then
+            -- Significant progress made (30% closer)
+            if State.stuckCount > 0 then
+                State.stuckCount = math.max(0, State.stuckCount - 1)
+                Log("Good progress! Stuck count reduced to " .. State.stuckCount)
+            end
+            closestDistance = distance  -- Update so we don't repeatedly trigger
         end
         
         -- CRITICAL: Check if seated and eject immediately
@@ -951,12 +968,20 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             local isStuck, stuckType = IsStuckAdvanced()
             if isStuck then
                 if State.stuckCount >= Config.MaxStuckAttempts then
-                    Log("Max stuck attempts reached", "ERROR")
+                    Log("❌ Max stuck attempts reached (" .. State.stuckCount .. "/" .. Config.MaxStuckAttempts .. ")", "ERROR")
+                    Log("Closest reached: " .. math.floor(closestDistance) .. " studs from waypoint", "ERROR")
                     return false
                 end
                 RecoverFromStuck(stuckType)
                 jumpExecuted = false
                 lastJumpCheck = 0
+            end
+        end
+        
+        -- Progress indicator every 5 seconds
+        if math.floor(tick() - startTime) % 5 == 0 and tick() - startTime > 1 then
+            if distance < closestDistance then
+                Log("💪 Making progress... " .. math.floor(distance) .. " studs to go (attempt " .. State.stuckCount .. "/" .. Config.MaxStuckAttempts .. ")")
             end
         end
         
