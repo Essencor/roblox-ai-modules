@@ -910,12 +910,16 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             humanoid:ChangeState(Enum.HumanoidStateType.Running)
         end
         
-        -- Continuous jump checking (no wait, just execute if needed)
+        -- Continuous jump checking (execute in coroutine to not pause movement)
         if Config.UseJumpOptimization and not jumpExecuted then
             if tick() - lastJumpCheck >= 0.2 then
                 local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
                 if needsJump then
-                    humanoid.Jump = true
+                    Log("⚡ Jump needed: " .. tostring(jumpType))
+                    -- Execute jump in separate coroutine so it doesn't pause movement loop
+                    task.spawn(function()
+                        ExecuteJump(jumpType)
+                    end)
                     jumpExecuted = true
                 end
                 lastJumpCheck = tick()
