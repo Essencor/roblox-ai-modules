@@ -1007,7 +1007,9 @@ local function FollowPath(pathData)
         local success = MoveToWaypoint(waypoint, i, #waypoints)
         
         if not success then
+            -- Failed at this waypoint
             if i < #waypoints - 1 then
+                -- Not at final waypoints yet, try rerouting
                 Log("Failed at waypoint " .. i .. "/" .. #waypoints .. " - attempting reroute", "WARN")
                 
                 local rootPart = GetRootPart()
@@ -1020,13 +1022,17 @@ local function FollowPath(pathData)
                 
                 Log("Reroute failed", "ERROR")
                 return false
+            else
+                -- Failed at one of the final waypoints - this is a failure!
+                Log("❌ Failed at waypoint " .. i .. "/" .. #waypoints .. " (near end)", "ERROR")
+                return false
             end
         end
         
         task.wait(0.1)
     end
     
-    Log("Path completed successfully!", "INFO")
+    Log("✅ Path completed successfully - reached all waypoints!", "INFO")
     return true
 end
 
@@ -1143,6 +1149,17 @@ function PathfindingModule.Navigate(target, mode)
     
     local duration = tick() - State.startTime
     State.isNavigating = false
+    
+    -- VERIFY we actually reached the destination, not just completed waypoints
+    if success and rootPart then
+        local finalDistance = GetDistance(rootPart.Position, endPos)
+        
+        -- Must be within 8 studs to be considered success
+        if finalDistance > 8 then
+            Log("⚠️ Completed path but still " .. math.floor(finalDistance) .. " studs away - marking as FAILED", "WARN")
+            success = false
+        end
+    end
     
     if success then
         Stats.successfulPaths = Stats.successfulPaths + 1
