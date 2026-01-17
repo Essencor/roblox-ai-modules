@@ -462,6 +462,13 @@ local function IsStuckAdvanced()
     local humanoid = GetHumanoid()
     if humanoid then
         local state = humanoid:GetState()
+        
+        -- Check if sitting (stuck in seat)
+        if state == Enum.HumanoidStateType.Seated then
+            Log("Stuck: Seated in chair/seat", "WARN")
+            return true, "seated"
+        end
+        
         if state == Enum.HumanoidStateType.Physics or 
            state == Enum.HumanoidStateType.Ragdoll or
            state == Enum.HumanoidStateType.FallingDown then
@@ -489,6 +496,27 @@ local function RecoverFromStuck(stuckType)
     local rootPart = GetRootPart()
     local humanoid = GetHumanoid()
     if not rootPart or not humanoid then return false end
+    
+    -- IMMEDIATE seat recovery - highest priority!
+    if stuckType == "seated" then
+        Log("Recovery: EJECTING FROM SEAT!", "WARN")
+        -- Jump to get out of seat
+        humanoid.Jump = true
+        task.wait(0.3)
+        -- Set state to running to force unseating
+        humanoid:ChangeState(Enum.HumanoidStateType.Running)
+        task.wait(0.2)
+        -- Jump again to be sure
+        humanoid.Jump = true
+        task.wait(0.3)
+        
+        State.lastMoveTime = tick()
+        State.lastPosition = rootPart.Position
+        State.consecutiveStuckFrames = 0
+        State.positionHistory = {}
+        Log("Ejected from seat successfully", "INFO")
+        return true
+    end
     
     -- Try vision-guided recovery first
     if Config.VisionGuidedRecovery and HasRaycasting() and State.stuckCount % 2 == 0 then
@@ -832,6 +860,17 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             State.lastSuccessfulWaypoint = currentPos
             Log("✓ Waypoint " .. waypointIndex .. " reached! (distance: " .. math.floor(distance) .. " studs)", "INFO")
             break
+        end
+        
+        -- CRITICAL: Check if seated and eject immediately
+        local humanoidState = humanoid:GetState()
+        if humanoidState == Enum.HumanoidStateType.Seated then
+            Log("⚠️ Detected sitting during pathfinding - ejecting!", "WARN")
+            humanoid.Jump = true
+            task.wait(0.2)
+            humanoid:ChangeState(Enum.HumanoidStateType.Running)
+            task.wait(0.1)
+            humanoid:MoveTo(waypointPos)  -- Re-issue move command
         end
         
         -- For final waypoint, be more lenient as time goes on
