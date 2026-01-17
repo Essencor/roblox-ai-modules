@@ -434,7 +434,8 @@ local function IsStuckAdvanced()
     if velocityMagnitude < Config.MinVelocity and timeSinceMove > Config.StuckTimeout then
         State.consecutiveStuckFrames = State.consecutiveStuckFrames + 1
         
-        if State.consecutiveStuckFrames > 5 then
+        -- Increased from 5 to 15 - be much more patient before marking as stuck
+        if State.consecutiveStuckFrames > 15 then
             Log("Stuck: Velocity check (speed: " .. math.floor(velocityMagnitude * 100) / 100 .. ")", "WARN")
             return true, "velocity"
         end
@@ -867,6 +868,8 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
     local lastJumpCheck = 0
     local jumpExecuted = false
     local closestDistance = math.huge
+    local lastMoveToTime = tick()
+    local lastScanTime = 0  -- Throttle scanning
     
     while tick() - startTime < timeout do
         if not State.isNavigating then
@@ -875,6 +878,12 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
         
         local currentPos = rootPart.Position
         local distance = GetDistance(currentPos, waypointPos)
+        
+        -- Re-issue MoveTo command every 0.5 seconds to keep movement smooth
+        if tick() - lastMoveToTime >= 0.5 then
+            humanoid:MoveTo(waypointPos)
+            lastMoveToTime = tick()
+        end
         
         -- Track closest distance
         if distance < closestDistance then
@@ -917,8 +926,8 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             humanoid:MoveTo(waypointPos)  -- Re-issue move command
         end
         
-        -- Continuous safety scanning (not for final waypoint if close)
-        if not (isFinalWaypoint and distance < 15) then
+        -- Continuous safety scanning (throttled to once per second to avoid stuttering)
+        if not (isFinalWaypoint and distance < 15) and tick() - lastScanTime >= 1.0 then
             if not PerformContinuousScan() then
                 Log("Safety scan failed - obstacle or cliff detected", "WARN")
                 -- Don't fail on final waypoint if we're close
@@ -926,6 +935,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
                     return false
                 end
             end
+            lastScanTime = tick()
         end
         
         -- Continuous jump checking (FAST - checks every 0.1s)
@@ -985,7 +995,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             end
         end
         
-        task.wait(0.1)
+        task.wait(0.05)  -- Check 20 times per second for smooth movement (was 0.1)
     end
     
     if not reached then
