@@ -59,7 +59,9 @@ local Config = {
     ContinuousScanning = false,  -- Disabled for ultra-smooth movement
     CliffAvoidance = true,
     VisionGuidedRecovery = true,
-    SafetyCheckInterval = 0.5
+    SafetyCheckInterval = 0.5,
+    MaxJumpableGapLength = 6,  -- Maximum gap length (in studs) character can jump over
+    TerrainScanDistance = 10,  -- How far ahead to scan terrain (in studs)
 }
 
 -- State
@@ -193,31 +195,61 @@ local function PerformPreNavigationScan(targetPos)
             -- Don't block navigation, just warn
         end
         
-        -- IMPROVED: Check for cliffs at multiple distances ahead
+        -- COMPREHENSIVE: Check ALL studs along path to target
         if Config.CliffAvoidance then
             local rootPart = GetRootPart()
             if rootPart then
                 local currentPos = rootPart.Position
                 local directionToTarget = (targetPos - currentPos).Unit
                 
-                -- Check 5 points along path to target: 2, 4, 6, 8, 10 studs
-                local cliffDetected = false
-                for checkDist = 2, 10, 2 do
-                    local checkPoint = currentPos + (directionToTarget * checkDist)
-                    
-                    -- Check if there's ground below this point
+                -- Build ground map for each stud
+                local groundMap = {}
+                local voidSections = {}
+                
+                -- Check EVERY stud from 1 to TerrainScanDistance
+                for stud = 1, Config.TerrainScanDistance do
+                    local checkPoint = currentPos + (directionToTarget * stud)
                     local hasGround = RaycastingVision.CheckGround(checkPoint, 20)
-                    
-                    if not hasGround then
-                        Stats.cliffsAvoided = Stats.cliffsAvoided + 1
-                        Log("Cliff detected " .. checkDist .. " studs ahead on path to target!", "WARN")
-                        cliffDetected = true
-                        break
+                    groundMap[stud] = hasGround
+                end
+                
+                -- Find continuous void sections
+                local voidStart = nil
+                for stud = 1, #groundMap do
+                    if not groundMap[stud] then
+                        if not voidStart then
+                            voidStart = stud
+                        end
+                    else
+                        if voidStart then
+                            table.insert(voidSections, {start = voidStart, finish = stud - 1, length = (stud - 1) - voidStart + 1})
+                            voidStart = nil
+                        end
                     end
                 end
                 
-                if cliffDetected then
-                    Log("Cliff on path - pathfinding will navigate around it", "INFO")
+                if voidStart then
+                    table.insert(voidSections, {start = voidStart, finish = #groundMap, length = #groundMap - voidStart + 1})
+                end
+                
+                -- Report detailed terrain analysis
+                if #voidSections > 0 then
+                    Stats.cliffsAvoided = Stats.cliffsAvoided + 1
+                    Log("📊 Terrain Analysis (first " .. Config.TerrainScanDistance .. " studs):", "INFO")
+                    for stud = 1, #groundMap do
+                        Log("  " .. stud .. " stud: " .. (groundMap[stud] and "✅ Safe" or "❌ Void"), "INFO")
+                    end
+                    
+                    Log("⚠️ Found " .. #voidSections .. " void section(s) on path:", "WARN")
+                    for i, section in ipairs(voidSections) do
+                        if section.length <= Config.MaxJumpableGapLength then
+                            Log("  Section " .. i .. ": studs " .. section.start .. "-" .. section.finish .. " (length: " .. section.length .. ") - JUMPABLE ✅", "INFO")
+                        else
+                            Log("  Section " .. i .. ": studs " .. section.start .. "-" .. section.finish .. " (length: " .. section.length .. ") - TOO LONG ❌", "WARN")
+                        end
+                    end
+                    
+                    Log("Pathfinding will navigate around voids or jump over small gaps", "INFO")
                 end
             end
         end
@@ -243,7 +275,7 @@ local function PerformContinuousScan()
     State.lastSafetyCheck = tick()
     
     local scanSuccess, scanResult = pcall(function()
-        -- Quick forward scan
+        -- Quick forward scan for obstacles
         local forwardScan = RaycastingVision.ScanForward(10, 5)
         
         if forwardScan and forwardScan.hasObstacle and forwardScan.minDistance < 2 then
@@ -251,24 +283,59 @@ local function PerformContinuousScan()
             return false
         end
         
-        -- IMPROVED: Check for cliffs at multiple distances (not just one point!)
+        -- COMPREHENSIVE: Check ALL studs ahead for cliffs/voids
         if Config.CliffAvoidance then
             local rootPart = GetRootPart()
             if rootPart then
                 local currentPos = rootPart.Position
                 local lookDirection = rootPart.CFrame.LookVector
                 
-                -- Check 3 points ahead: 2 studs, 4 studs, and 6 studs
-                for checkDist = 2, 6, 2 do
-                    local checkPoint = currentPos + (lookDirection * checkDist)
-                    
-                    -- Check if there's ground below this point
+                -- Build ground map for each stud
+                local groundMap = {}
+                local voidSections = {}
+                
+                -- Check EVERY stud from 1 to TerrainScanDistance
+                for stud = 1, Config.TerrainScanDistance do
+                    local checkPoint = currentPos + (lookDirection * stud)
                     local hasGround = RaycastingVision.CheckGround(checkPoint, 20)
+                    groundMap[stud] = hasGround
+                end
+                
+                -- Find continuous void sections
+                local voidStart = nil
+                for stud = 1, #groundMap do
+                    if not groundMap[stud] then
+                        if not voidStart then
+                            voidStart = stud
+                        end
+                    else
+                        if voidStart then
+                            table.insert(voidSections, {start = voidStart, finish = stud - 1, length = (stud - 1) - voidStart + 1})
+                            voidStart = nil
+                        end
+                    end
+                end
+                
+                if voidStart then
+                    table.insert(voidSections, {start = voidStart, finish = #groundMap, length = #groundMap - voidStart + 1})
+                end
+                
+                -- If we detect voids, report them
+                if #voidSections > 0 then
+                    local firstVoid = voidSections[1]
                     
-                    if not hasGround then
+                    -- Only warn about close voids (within half scan distance)
+                    if firstVoid.start <= Config.TerrainScanDistance / 2 then
                         Stats.cliffsAvoided = Stats.cliffsAvoided + 1
-                        Log("Cliff detected " .. checkDist .. " studs ahead during navigation!", "WARN")
-                        return false
+                        Log("⚠️ Cliff ahead! Void at studs " .. firstVoid.start .. "-" .. firstVoid.finish .. " (length: " .. firstVoid.length .. ")", "WARN")
+                        
+                        -- Don't stop for jumpable gaps
+                        if firstVoid.length > Config.MaxJumpableGapLength then
+                            Log("❌ Void too large to jump - stopping!", "ERROR")
+                            return false
+                        else
+                            Log("✅ Void is jumpable - continuing", "INFO")
+                        end
                     end
                 end
             end
@@ -674,44 +741,77 @@ local function CheckJumpRequired(currentPos, nextPos)
     local heightDiff = nextPos.Y - currentPos.Y
     
     -- Immediate high jump detection
-    if heightDiff > 4 then  -- Lowered from 5 for earlier detection
+    if heightDiff > 4 then
         return true, "high_jump"
     end
     
     -- Check for small height differences that still need a jump
-    if heightDiff > 1.5 then  -- Lowered from 2 for more aggressive jumping
+    if heightDiff > 1.5 then
         return true, "normal"
     end
     
-    -- IMPROVED: Check multiple points along path for gaps/cliffs
+    -- COMPREHENSIVE: Check EVERY stud from 1-10 and map ground/void
     if HasRaycasting() then
         local directionToNext = (nextPos - currentPos).Unit
         local distanceToNext = GetDistance(currentPos, nextPos)
-        local checkDistance = math.min(distanceToNext, 10)
+        local checkDistance = math.min(distanceToNext, Config.TerrainScanDistance)
         
-        -- Check 5 points along the path (not just the midpoint!)
-        local numChecks = 5
-        local hasGap = false
+        -- Build ground map for each stud
+        local groundMap = {}
+        local voidSections = {}
         
-        for i = 1, numChecks do
-            local checkPoint = currentPos + (directionToNext * (checkDistance * i / numChecks))
+        -- Check EVERY stud individually (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+        for stud = 1, math.floor(checkDistance) do
+            local checkPoint = currentPos + (directionToNext * stud)
             local hasGround = RaycastingVision.CheckGround(checkPoint, 20)
             
-            if not hasGround then
-                -- Found a gap at this point!
-                hasGap = true
-                Log("⚠️ Gap detected at " .. math.floor(checkDistance * i / numChecks) .. " studs ahead", "WARN")
-                break
+            groundMap[stud] = hasGround
+        end
+        
+        -- Analyze the ground map to find continuous void sections
+        local voidStart = nil
+        for stud = 1, #groundMap do
+            if not groundMap[stud] then
+                -- Found void
+                if not voidStart then
+                    voidStart = stud  -- Start of void section
+                end
+            else
+                -- Found ground
+                if voidStart then
+                    -- End of void section
+                    table.insert(voidSections, {start = voidStart, finish = stud - 1, length = (stud - 1) - voidStart + 1})
+                    voidStart = nil
+                end
             end
         end
         
-        if hasGap then
-            local horizontalDist = GetDistance(
-                Vector3.new(currentPos.X, 0, currentPos.Z),
-                Vector3.new(nextPos.X, 0, nextPos.Z)
-            )
+        -- If void continues to end
+        if voidStart then
+            table.insert(voidSections, {start = voidStart, finish = #groundMap, length = #groundMap - voidStart + 1})
+        end
+        
+        -- Report findings
+        if #voidSections > 0 then
+            Log("📊 Ground Map Analysis:", "INFO")
+            for stud = 1, #groundMap do
+                Log("  " .. stud .. " stud" .. (stud > 1 and "s" or "") .. ": " .. (groundMap[stud] and "✅ Land" or "❌ VOID"), "INFO")
+            end
             
-            if horizontalDist > 4 then
+            for i, section in ipairs(voidSections) do
+                Log("⚠️ Void section #" .. i .. ": studs " .. section.start .. "-" .. section.finish .. " (length: " .. section.length .. " studs)", "WARN")
+            end
+            
+            -- Find the first/closest void section
+            local firstVoid = voidSections[1]
+            
+            -- Decide if we can jump over it
+            if firstVoid.length <= Config.MaxJumpableGapLength then
+                Log("✅ Can jump over void (length: " .. firstVoid.length .. " studs, max: " .. Config.MaxJumpableGapLength .. ")", "INFO")
+                return true, "gap_jump"
+            else
+                Log("❌ Void too long to jump (length: " .. firstVoid.length .. " studs, max: " .. Config.MaxJumpableGapLength .. ") - need to reroute", "ERROR")
+                -- Still try to jump, pathfinding will reroute if it fails
                 return true, "gap_jump"
             end
         end
@@ -721,7 +821,6 @@ local function CheckJumpRequired(currentPos, nextPos)
     if HasRaycasting() then
         local directionToWaypoint = (nextPos - currentPos).Unit
         local checkDistance = math.min(GetDistance(currentPos, nextPos), 8)
-        local checkPos = currentPos + (directionToWaypoint * (checkDistance / 2))
         
         -- Cast ray at waist height to detect walls/obstacles
         local hasObstacle = RaycastingVision.ScanForward(checkDistance, 3)
