@@ -37,14 +37,14 @@ local Config = {
     MaxStuckAttempts = 8,
     DeathRadius = 10,
     MaxDeathZones = 50,
-    WaypointReachedDistance = 6,  -- Increased from 4 for better reliability
-    FinalWaypointDistance = 8,    -- Even more lenient for final destination
+    WaypointReachedDistance = 3,  -- Strict - must be close
+    FinalWaypointDistance = 4,    -- Final destination must be accurate
     ShowPath = false,
     ShowWaypoints = true,
     PathColor = Color3.new(0, 1, 0),
     WaypointColor = Color3.new(1, 1, 0),
     UseSmartPathing = true,
-    UseJumpOptimization = false,
+    UseJumpOptimization = true,  -- Enabled for faster jump detection
     UseStuckRecovery = true,
     UseDynamicRerouting = true,
     UseObstacleDetection = true,
@@ -640,8 +640,14 @@ end
 local function CheckJumpRequired(currentPos, nextPos)
     local heightDiff = nextPos.Y - currentPos.Y
     
-    if heightDiff > 5 then
+    -- Immediate high jump detection
+    if heightDiff > 4 then  -- Lowered from 5 for earlier detection
         return true, "high_jump"
+    end
+    
+    -- Check for small height differences that still need a jump
+    if heightDiff > 1.5 then  -- Lowered from 2 for more aggressive jumping
+        return true, "normal"
     end
     
     -- Use raycasting for gap detection if available
@@ -655,14 +661,24 @@ local function CheckJumpRequired(currentPos, nextPos)
                 Vector3.new(nextPos.X, 0, nextPos.Z)
             )
             
-            if distance > 5 then
+            if distance > 4 then  -- Lowered from 5 for earlier detection
                 return true, "gap_jump"
             end
         end
     end
     
-    if heightDiff > 2 and heightDiff <= 5 then
-        return true, "normal"
+    -- Check if there's an obstacle ahead at ground level
+    if HasRaycasting() then
+        local directionToWaypoint = (nextPos - currentPos).Unit
+        local checkDistance = math.min(GetDistance(currentPos, nextPos), 8)
+        local checkPos = currentPos + (directionToWaypoint * (checkDistance / 2))
+        
+        -- Cast ray at waist height to detect walls/obstacles
+        local hasObstacle = RaycastingVision.ScanForward(checkDistance, 3)
+        if hasObstacle and hasObstacle.hasObstacle and hasObstacle.minDistance < checkDistance * 0.7 then
+            -- There's an obstacle - might need to jump over it
+            return true, "normal"
+        end
     end
     
     return false, nil
@@ -686,7 +702,7 @@ local function ComputePath(startPos, endPos, useDeathAvoidance)
         AgentRadius = 2,
         AgentHeight = 5,
         AgentCanJump = true,
-        AgentCanClimb = false,
+        AgentCanClimb = true,  -- Enable ladder climbing
         WaypointSpacing = Config.WaypointSpacing,
         Costs = {
             Water = 20,
@@ -831,10 +847,21 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
         end
     end
     
+    -- IMMEDIATE pre-check: Do we need to jump to reach this waypoint?
+    if Config.UseJumpOptimization then
+        local needsJump, jumpType = CheckJumpRequired(rootPart.Position, waypointPos)
+        if needsJump then
+            Log("⚡ Pre-check: Jump needed immediately! Type: " .. tostring(jumpType))
+            ExecuteJump(jumpType)
+            task.wait(0.3)
+            jumpExecuted = true
+        end
+    end
+    
     humanoid:MoveTo(waypointPos)
     
     local startTime = tick()
-    local timeout = isFinalWaypoint and 15 or 10  -- More time for final waypoint
+    local timeout = isFinalWaypoint and 30 or 20  -- Much more time for jumps and complex navigation
     local reached = false
     local checkInterval = 0
     local lastJumpCheck = 0
@@ -854,7 +881,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             closestDistance = distance
         end
         
-        -- Check if reached
+        -- Check if reached (STRICT)
         if distance <= reachedDistance then
             reached = true
             State.lastSuccessfulWaypoint = currentPos
@@ -873,17 +900,6 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             humanoid:MoveTo(waypointPos)  -- Re-issue move command
         end
         
-        -- For final waypoint, be more lenient as time goes on
-        if isFinalWaypoint and tick() - startTime > 5 then
-            -- After 5 seconds, accept being within 12 studs
-            if distance <= 12 then
-                reached = true
-                State.lastSuccessfulWaypoint = currentPos
-                Log("✓ Final waypoint reached (lenient: " .. math.floor(distance) .. " studs)", "INFO")
-                break
-            end
-        end
-        
         -- Continuous safety scanning (not for final waypoint if close)
         if not (isFinalWaypoint and distance < 15) then
             if not PerformContinuousScan() then
@@ -895,12 +911,12 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             end
         end
         
-        -- Continuous jump checking
+        -- Continuous jump checking (FAST - checks every 0.1s)
         if Config.UseJumpOptimization and not jumpExecuted then
-            if tick() - lastJumpCheck >= 0.5 then
+            if tick() - lastJumpCheck >= 0.1 then  -- Very frequent checks (was 0.5s, now 0.1s)
                 local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
                 if needsJump then
-                    Log("Jump needed: " .. tostring(jumpType) .. " (distance: " .. math.floor(distance) .. ")")
+                    Log("⚡ Jump detected! Type: " .. tostring(jumpType) .. " (distance: " .. math.floor(distance) .. ")")
                     ExecuteJump(jumpType)
                     jumpExecuted = true
                     task.wait(0.3)
@@ -948,12 +964,8 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
     end
     
     if not reached then
-        if isFinalWaypoint and closestDistance <= 15 then
-            Log("Final waypoint close enough! (closest: " .. math.floor(closestDistance) .. " studs)", "INFO")
-            return true  -- Accept close enough on final waypoint
-        else
-            Log("Waypoint " .. waypointIndex .. "/" .. totalWaypoints .. " timeout (closest: " .. math.floor(closestDistance) .. " studs)", "WARN")
-        end
+        Log("Waypoint " .. waypointIndex .. "/" .. totalWaypoints .. " timeout (closest: " .. math.floor(closestDistance) .. " studs)", "WARN")
+        return false  -- Must actually reach waypoint, no "close enough"
     end
     
     return reached
@@ -1147,15 +1159,6 @@ function PathfindingModule.Navigate(target, mode)
     
     local duration = tick() - State.startTime
     State.isNavigating = false
-    
-    -- Final check: if we're close enough to target, mark as success
-    if not success and rootPart then
-        local finalDistance = GetDistance(rootPart.Position, endPos)
-        if finalDistance <= 15 then
-            Log("✅ Close enough to target! Final distance: " .. math.floor(finalDistance) .. " studs", "INFO")
-            success = true
-        end
-    end
     
     if success then
         Stats.successfulPaths = Stats.successfulPaths + 1
