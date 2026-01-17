@@ -56,7 +56,7 @@ local Config = {
     -- Raycasting Integration Settings
     UseRaycastingVision = true,
     PreNavigationScan = false,  -- Changed to false by default to avoid blocking navigation
-    ContinuousScanning = true,
+    ContinuousScanning = false,  -- Disabled for ultra-smooth movement
     CliffAvoidance = true,
     VisionGuidedRecovery = true,
     SafetyCheckInterval = 0.5
@@ -870,6 +870,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
     local closestDistance = math.huge
     local lastMoveToTime = tick()
     local lastScanTime = 0  -- Throttle scanning
+    local lastProgressLog = 0
     
     while tick() - startTime < timeout do
         if not State.isNavigating then
@@ -879,15 +880,13 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
         local currentPos = rootPart.Position
         local distance = GetDistance(currentPos, waypointPos)
         
-        -- Re-issue MoveTo command every 0.5 seconds to keep movement smooth
-        if tick() - lastMoveToTime >= 0.5 then
-            humanoid:MoveTo(waypointPos)
-            lastMoveToTime = tick()
-        end
+        -- CONSTANTLY re-issue MoveTo for ultra-smooth movement
+        humanoid:MoveTo(waypointPos)
         
         -- Track closest distance
         if distance < closestDistance then
             closestDistance = distance
+            State.lastMoveTime = tick()  -- Update move time when making progress
         end
         
         -- Check if reached (STRICT)
@@ -898,104 +897,50 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
             -- Reward progress: reduce stuck count on successful waypoint
             if State.stuckCount > 0 then
                 State.stuckCount = math.max(0, State.stuckCount - 2)
-                Log("Progress rewarded! Stuck count reduced to " .. State.stuckCount)
             end
             
             Log("✓ Waypoint " .. waypointIndex .. " reached! (distance: " .. math.floor(distance) .. " studs)", "INFO")
             break
         end
         
-        -- Reduce stuck count when making good progress (getting closer)
-        if closestDistance > 0 and distance < closestDistance * 0.7 then
-            -- Significant progress made (30% closer)
-            if State.stuckCount > 0 then
-                State.stuckCount = math.max(0, State.stuckCount - 1)
-                Log("Good progress! Stuck count reduced to " .. State.stuckCount)
-            end
-            closestDistance = distance  -- Update so we don't repeatedly trigger
-        end
-        
-        -- CRITICAL: Check if seated and eject immediately
+        -- CRITICAL: Check if seated and eject immediately (no wait)
         local humanoidState = humanoid:GetState()
         if humanoidState == Enum.HumanoidStateType.Seated then
-            Log("⚠️ Detected sitting during pathfinding - ejecting!", "WARN")
             humanoid.Jump = true
-            task.wait(0.2)
             humanoid:ChangeState(Enum.HumanoidStateType.Running)
-            task.wait(0.1)
-            humanoid:MoveTo(waypointPos)  -- Re-issue move command
         end
         
-        -- Continuous safety scanning (throttled to once per second to avoid stuttering)
-        if not (isFinalWaypoint and distance < 15) and tick() - lastScanTime >= 1.0 then
-            if not PerformContinuousScan() then
-                Log("Safety scan failed - obstacle or cliff detected", "WARN")
-                -- Don't fail on final waypoint if we're close
-                if not isFinalWaypoint or distance > 15 then
-                    return false
-                end
-            end
-            lastScanTime = tick()
-        end
-        
-        -- Continuous jump checking (FAST - checks every 0.1s)
+        -- Continuous jump checking (no wait, just execute if needed)
         if Config.UseJumpOptimization and not jumpExecuted then
-            if tick() - lastJumpCheck >= 0.1 then  -- Very frequent checks (was 0.5s, now 0.1s)
+            if tick() - lastJumpCheck >= 0.2 then
                 local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
                 if needsJump then
-                    Log("⚡ Jump detected! Type: " .. tostring(jumpType) .. " (distance: " .. math.floor(distance) .. ")")
-                    ExecuteJump(jumpType)
+                    humanoid.Jump = true
                     jumpExecuted = true
-                    task.wait(0.3)
-                    humanoid:MoveTo(waypointPos)
                 end
                 lastJumpCheck = tick()
             end
         end
         
-        -- Smart waypoint skipping
-        if Config.UseSmartPathing and waypointIndex < totalWaypoints - 1 then
-            local nextWaypoint = State.currentPath.waypoints[waypointIndex + 2]
-            if nextWaypoint then
-                local canSkip = CanSkipToWaypoint(currentPos, nextWaypoint, waypoint)
-                if canSkip then
-                    Log("Skipping waypoint " .. waypointIndex .. " (vision confirmed clear path)")
-                    Stats.waypointsSkipped = Stats.waypointsSkipped + 1
-                    return true
-                end
+        -- MINIMAL stuck detection - only if completely stuck (no progress at all)
+        if tick() - State.lastMoveTime > 5 then  -- 5 seconds of NO progress at all
+            if State.stuckCount >= Config.MaxStuckAttempts then
+                Log("❌ Completely stuck (" .. State.stuckCount .. "/" .. Config.MaxStuckAttempts .. ")", "ERROR")
+                return false
             end
+            -- Quick recovery without pausing
+            humanoid.Jump = true
+            State.stuckCount = State.stuckCount + 1
+            State.lastMoveTime = tick()
         end
         
-        -- Update position history
-        checkInterval = checkInterval + 0.1
-        if checkInterval >= Config.VelocityCheckInterval then
-            UpdatePositionHistory()
-            checkInterval = 0
+        -- Progress indicator (throttled)
+        if tick() - lastProgressLog > 3 and distance < closestDistance then
+            Log("💪 Progress: " .. math.floor(distance) .. " studs to go")
+            lastProgressLog = tick()
         end
         
-        -- Enhanced stuck detection
-        if Config.UseStuckRecovery then
-            local isStuck, stuckType = IsStuckAdvanced()
-            if isStuck then
-                if State.stuckCount >= Config.MaxStuckAttempts then
-                    Log("❌ Max stuck attempts reached (" .. State.stuckCount .. "/" .. Config.MaxStuckAttempts .. ")", "ERROR")
-                    Log("Closest reached: " .. math.floor(closestDistance) .. " studs from waypoint", "ERROR")
-                    return false
-                end
-                RecoverFromStuck(stuckType)
-                jumpExecuted = false
-                lastJumpCheck = 0
-            end
-        end
-        
-        -- Progress indicator every 5 seconds
-        if math.floor(tick() - startTime) % 5 == 0 and tick() - startTime > 1 then
-            if distance < closestDistance then
-                Log("💪 Making progress... " .. math.floor(distance) .. " studs to go (attempt " .. State.stuckCount .. "/" .. Config.MaxStuckAttempts .. ")")
-            end
-        end
-        
-        task.wait(0.05)  -- Check 20 times per second for smooth movement (was 0.1)
+        task.wait(0.03)  -- Very fast checking, minimal wait
     end
     
     if not reached then
