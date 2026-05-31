@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
--- Loads the restored original hub, applies Luau compile fixes, then runs it.
+-- Loads the restored original hub, applies runtime fixes, then runs it.
 
-print("[SS Chatbot] loader v18 started")
+print("[SS Chatbot] loader v19 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = table.concat({
@@ -38,45 +38,34 @@ if type(source) ~= "string" or source == "" then
    error("[SS Chatbot] Empty source from GitHub")
 end
 
--- Seed the script's default custom OpenRouter key.
-source = source:gsub(
-   'ApiKey = "",',
-   'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",',
-   1
-)
+source = source:gsub('ApiKey = "",', 'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",', 1)
 
--- Swap the public free model IDs everywhere they appear, including defaults and dropdown options.
 for oldModel, newModel in pairs(MODEL_REPLACEMENTS) do
    source = source:gsub(escapePattern(oldModel), newModel)
 end
 
--- Replace all bundled OpenRouter keys with the current key.
 for _, oldKey in ipairs(BUILT_IN_KEY_REPLACEMENTS) do
    source = source:gsub(escapePattern(oldKey), DEFAULT_OPENROUTER_KEY)
 end
 
--- Make API calls prefer Config.ApiKey when it has a default/custom value.
 source = source:gsub(
    'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
    'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]',
    1
 )
 
--- Let OpenRouter route away from overloaded providers when a model has alternatives.
 source = source:gsub(
    'max_tokens = 80  %-%- Reduced to ensure shorter responses',
    'max_tokens = 80,  -- Reduced to ensure shorter responses\n      provider = {\n         allow_fallbacks = true,\n         sort = "throughput"\n      }',
    1
 )
 
--- Clean up an earlier Rayfield instance before creating a new UI. Re-running the loadstring otherwise leaves stale UI state behind.
 source = source:gsub(
    'print%("%[AI Chatbot%] Rayfield UI loaded successfully!"%)',
    'print("[AI Chatbot] Rayfield UI loaded successfully!")\npcall(function()\n   if Rayfield and Rayfield.Destroy then\n      Rayfield:Destroy()\n   end\nend)',
    1
 )
 
--- Use explicit current Rayfield options so the window starts consistently across reloads.
 source = source:gsub(
    'local Window = Rayfield:CreateWindow%(%{',
    'local Window = Rayfield:CreateWindow({\n   Icon = 0,\n   ShowText = "SS Hub",\n   Theme = "Default",\n   ToggleUIKeybind = "RightShift",\n   DisableRayfieldPrompts = true,\n   DisableBuildWarnings = true,',
@@ -84,12 +73,11 @@ source = source:gsub(
 )
 
 source = source:gsub(
-   'LoadingSubtitle = "by SS"\n%}%))',
+   'LoadingSubtitle = "by SS"%s*\n%s*}%)',
    'LoadingSubtitle = "by SS"\n})\nif getgenv then\n   getgenv().SSChatbotWindow = Window\nend',
    1
 )
 
--- Replace the noisy AutoGreet loop with a guarded quiet loop. This prevents repeated loadstring runs from stacking loops.
 local quietAutoGreetLoop = [==[
 local function AutoGreetLoop()
    while true do
@@ -105,7 +93,6 @@ local function AutoGreetLoop()
             if playerToGreet then
                local displayName = GetPlayerDisplayName(playerToGreet)
                print("[AutoGreet] Greeting:", displayName, string.format("(@%s, %.1f studs)", playerToGreet.Name, distance))
-
                local greeting = GenerateGreeting(playerToGreet)
 
                if Config.PathfindingEnabled and LoadedModules.Pathfinding then
@@ -133,26 +120,10 @@ if not autoGreetEnv.SSChatbotAutoGreetLoopActive then
 end
 ]==]
 
-source = source:gsub(
-   'local function AutoGreetLoop%(%)%s*.-spawn%(AutoGreetLoop%)',
-   quietAutoGreetLoop,
-   1
-)
+source = source:gsub('local function AutoGreetLoop%(%)%s*.-spawn%(AutoGreetLoop%)', quietAutoGreetLoop, 1)
+source = source:gsub('Content = "Testing all 3 free models%.%.%.",', 'Content = "Testing all 3 free models with pauses...",', 1)
+source = source:gsub('wait%(2%) %-%- Longer delay between tests', 'wait(8) -- Give free upstream providers room between tests', 1)
 
--- The model tester was making three back-to-back free-provider requests. Slow it down to avoid self-inflicted 429s.
-source = source:gsub(
-   'Content = "Testing all 3 free models%.%.%.",',
-   'Content = "Testing all 3 free models with pauses...",',
-   1
-)
-source = source:gsub(
-   'wait%(2%) %-%- Longer delay between tests',
-   'wait(8) -- Give free upstream providers room between tests',
-   1
-)
-
--- The original script creates an empty set of tabs first, then creates the real
--- tabs again where the UI content is added. Remove the empty first set.
 local duplicateTabBlock = [==[
 -- Create Tabs
 local ChatTab = Window:CreateTab("Chatbot", 4483362458)
@@ -175,9 +146,6 @@ if removedExact == 0 then
    )
 end
 
--- The original script has hundreds of top-level UI locals. Roblox/Luau can hit
--- the 200 local-register compile limit near the final Settings labels, so scope
--- the late UI sections before compiling. This preserves the original behavior.
 source = source:gsub(
    "MemoryTab = Window:CreateTab%(\"Memory\", 4483362458%)%s*\n%s*local MemorySection = MemoryTab:CreateSection%(\"Memory Statistics\"%)",
    "MemoryTab = Window:CreateTab(\"Memory\", 4483362458)\n\ndo\nlocal MemorySection = MemoryTab:CreateSection(\"Memory Statistics\")",
