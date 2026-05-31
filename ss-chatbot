@@ -105,7 +105,7 @@ pcall(function()
 	end
 
 	local Topbar = Main:FindFirstChild("Topbar")
-	if Topbar then
+	if Topbar and pcall(function() return Topbar.ClassName end) then
 		-- Topbar.Title
 		if not Topbar:FindFirstChild("Title") then
 			local Title = Instance.new("TextLabel")
@@ -213,7 +213,7 @@ source = source:gsub(
 	1
 )
 
--- ── Model test delays ────────────────────────────────────────────────────────
+-- ── Model test delays ───────────────────────────────────────────────────────
 source = source:gsub('Content = "Testing all 3 free models%.%.%.",',  'Content = "Testing all 3 free models with pauses...",')
 source = source:gsub('wait%(2%) %-%- Longer delay between tests',      'wait(8) -- Give free upstream providers room between tests')
 
@@ -279,7 +279,7 @@ source = source:gsub(
 	1
 )
 
--- ── Compile & run ────────────────────────────────────────────────────────────
+-- ── Compile & run ──────────────────────────────────────────────────────────
 local chunk, compileErr = loadstring(source)
 if not chunk then
 	error("[SS Chatbot] compile failed: " .. tostring(compileErr))
