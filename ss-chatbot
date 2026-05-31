@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
-print("[SS Chatbot] loader v28 started")
+print("[SS Chatbot] loader v29 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = table.concat({
@@ -67,46 +67,27 @@ source = source:gsub(
 
    if label == "Rayfield" then
       source = source:gsub(
-         "local Topbar = Main%.Topbar%s*\nlocal Elements = Main%.Elements",
-         function()
-            return [[local Topbar = Main.Topbar
-
-   if not Topbar:FindFirstChild("Title") then
-      local Title = Instance.new("TextLabel")
-      Title.Name = "Title"
-      Title.AnchorPoint = Vector2.new(0, 0.5)
-      Title.Position = UDim2.new(0, 15, 0.5, 0)
-      Title.Size = UDim2.new(1, -150, 1, 0)
-      Title.BackgroundTransparency = 1
-      Title.TextColor3 = Color3.fromRGB(240, 240, 240)
-      Title.TextTransparency = 1
-      Title.TextSize = 16
-      Title.Font = Enum.Font.GothamMedium
-      Title.TextXAlignment = Enum.TextXAlignment.Left
-      Title.Parent = Topbar
-   end
-
-   if not Main:FindFirstChild("Shadow") then
-      local Shadow = Instance.new("Frame")
-      Shadow.Name = "Shadow"
-      Shadow.BackgroundTransparency = 1
-      Shadow.Size = UDim2.new(1, 36, 1, 36)
-      Shadow.Position = UDim2.new(0, -18, 0, -18)
-      Shadow.ZIndex = Main.ZIndex - 1
-      Shadow.Parent = Main
-
-      local Image = Instance.new("ImageLabel")
-      Image.Name = "Image"
-      Image.BackgroundTransparency = 1
-      Image.Size = UDim2.new(1, 0, 1, 0)
-      Image.ImageTransparency = 1
-      Image.ScaleType = Enum.ScaleType.Slice
-      Image.SliceCenter = Rect.new(49, 49, 450, 450)
-      Image.Parent = Shadow
-   end
-
-   local Elements = Main.Elements]]
-         end,
+         'local Elements = Main%.Elements',
+         [[pcall(function()
+      if not Main:FindFirstChild("Shadow") then
+         local Shadow = Instance.new("Frame")
+         Shadow.Name = "Shadow"
+         Shadow.BackgroundTransparency = 1
+         Shadow.Size = UDim2.new(1, 36, 1, 36)
+         Shadow.Position = UDim2.new(0, -18, 0, -18)
+         Shadow.ZIndex = Main.ZIndex - 1
+         Shadow.Parent = Main
+         local Image = Instance.new("ImageLabel")
+         Image.Name = "Image"
+         Image.BackgroundTransparency = 1
+         Image.Size = UDim2.new(1, 0, 1, 0)
+         Image.ImageTransparency = 1
+         Image.ScaleType = Enum.ScaleType.Slice
+         Image.SliceCenter = Rect.new(49, 49, 450, 450)
+         Image.Parent = Shadow
+      end
+   end)
+   local Elements = Main.Elements]],
          1
       )
 
@@ -131,6 +112,16 @@ source = source:gsub(
    Topbar.Title.Text = Settings.Name]]
          end,
          1
+      )
+
+      source = source:gsub(
+         'Main%.Shadow%.Image%.ImageTransparency',
+         'Main:FindFirstChild("Shadow") and Main.Shadow.Image.ImageTransparency'
+      )
+
+      source = source:gsub(
+         'Main%.Shadow%.Image',
+         'Main:FindFirstChild("Shadow") and Main.Shadow.Image'
       )
    end
 
