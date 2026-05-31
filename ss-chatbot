@@ -1,164 +1,160 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
-print("[SS Chatbot] loader v33 started")
+print("[SS Chatbot] loader v34 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
-local DEFAULT_OPENROUTER_KEY = "sk-or-v1-" .. "3ca85b5c5b42343dad6573c1584e4b03451460bbdb406278a9eba474a43845a2"
+local DEFAULT_OPENROUTER_KEY = "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"
 
 local function escapePattern(text)
-   return (text:gsub("([^%w])", "%%%1"))
+	return (text:gsub("([^%w])", "%%%1"))
 end
 
 local okFetch, source = pcall(function()
-   return game:HttpGet(SOURCE_URL, true)
+	return game:HttpGet(SOURCE_URL, true)
 end)
 
 if not okFetch then
-   error("[SS Chatbot] HttpGet failed: " .. tostring(source))
+	error("[SS Chatbot] HttpGet failed: " .. tostring(source))
 end
 
 if type(source) ~= "string" or source == "" then
-   error("[SS Chatbot] Empty source from GitHub")
+	error("[SS Chatbot] Empty source from GitHub")
 end
 
+-- ── API key: inject default and replace all hardcoded keys ──────────────────
 source = source:gsub('ApiKey = "",', 'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",', 1)
-
-source = source:gsub(escapePattern("tngtech/deepseek-r1t2-chimera:free"), "google/gemma-4-31b-it:free")
-source = source:gsub(escapePattern("mistralai/devstral-2512:free"), "nousresearch/hermes-3-llama-3.1-405b:free")
-source = source:gsub(escapePattern("xiaomi/mimo-v2-flash:free"), "cognitivecomputations/dolphin-mistral-24b-venice-edition:free")
 
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 
+-- ── Model replacements ───────────────────────────────────────────────────────
+source = source:gsub(escapePattern("tngtech/deepseek-r1t2-chimera:free"),    "google/gemma-4-31b-it:free")
+source = source:gsub(escapePattern("mistralai/devstral-2512:free"),           "nousresearch/hermes-3-llama-3.1-405b:free")
+source = source:gsub(escapePattern("xiaomi/mimo-v2-flash:free"),              "cognitivecomputations/dolphin-mistral-24b-venice-edition:free")
+
+-- ── API key selection: prefer user-set key over model-specific key ───────────
 source = source:gsub(
-   'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
-   'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]',
-   1
+	'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
+	'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]',
+	1
 )
 
+-- ── OpenRouter provider hint for free-tier throughput ───────────────────────
 source = source:gsub(
-   'max_tokens = 80  %-%- Reduced to ensure shorter responses',
-   'max_tokens = 80,  -- Reduced to ensure shorter responses\n      provider = {\n         allow_fallbacks = true,\n         sort = "throughput"\n      }',
-   1
+	'max_tokens = 80  %-%- Reduced to ensure shorter responses',
+	'max_tokens = 80,  -- Reduced to ensure shorter responses\n      provider = {\n         allow_fallbacks = true,\n         sort = "throughput"\n      }',
+	1
 )
 
+-- ── Patch the inner loadRemoteChunk so we can intercept the Rayfield source ──
+--
+-- Strategy for the Shadow crash:
+--   Rayfield animates Main.Shadow.Image.ImageTransparency via TweenService.
+--   In some executor environments Main.Shadow doesn't get created, so every
+--   reference to it throws "Shadow is not a valid member of Frame 'Main'".
+--   The safest fix is to patch Rayfield's source AFTER it is fetched but
+--   BEFORE it is loadstring'd, wrapping every Main.Shadow statement in a
+--   pcall so failures are silent instead of fatal.
 source = source:gsub(
-   'local source = game:HttpGet%(url, true%)%s*\n%s*local chunk, compileErr = loadstring%(source%)',
-   function()
-      return [==[local source = game:HttpGet(url, true)
+	'local source = game:HttpGet%(url, true%)%s*\n%s*local chunk, compileErr = loadstring%(source%)',
+	function()
+		return [==[local source = game:HttpGet(url, true)
 
-   if label == "Rayfield" then
-      source = source:gsub(
-         'local Elements = Main%.Elements',
-         [[pcall(function()
-      pcall(function()
-         if not Main:FindFirstChild("Shadow") then
-            local Shadow = Instance.new("Frame")
-            Shadow.Name = "Shadow"
-            Shadow.BackgroundTransparency = 1
-            Shadow.Size = UDim2.new(1, 36, 1, 36)
-            Shadow.Position = UDim2.new(0, -18, 0, -18)
-            Shadow.ZIndex = Main.ZIndex - 1
-            Shadow.Parent = Main
-            local Image = Instance.new("ImageLabel")
-            Image.Name = "Image"
-            Image.BackgroundTransparency = 1
-            Image.Size = UDim2.new(1, 0, 1, 0)
-            Image.ImageTransparency = 1
-            Image.ScaleType = Enum.ScaleType.Slice
-            Image.SliceCenter = Rect.new(49, 49, 450, 450)
-            Image.Parent = Shadow
-         end
-      end)
-   end)
-   local Elements = Main.Elements]],
-         1
-      )
+	if label == "Rayfield" then
+		-- Wrap every bare Main.Shadow.* statement in a pcall so that
+		-- executors where Shadow is missing don't crash Rayfield.
+		source = source:gsub(
+			'([ \t]*)(TweenService:Create%b()%s*:Play%(%))([^\n]*Main%.Shadow[^\n]*)',
+			'%1pcall(function() %2%3 end)'
+		)
+		source = source:gsub(
+			'([ \t]*)(Main%.Shadow%.[^\n]+)',
+			'%1pcall(function() %2 end)'
+		)
 
-      source = source:gsub(
-         "local Passthrough = false%s*\n%s*Topbar%.Title%.Text = Settings%.Name",
-         function()
-            return [[local Passthrough = false
-   if not Topbar:FindFirstChild("Title") then
-      local Title = Instance.new("TextLabel")
-      Title.Name = "Title"
-      Title.AnchorPoint = Vector2.new(0, 0.5)
-      Title.Position = UDim2.new(0, 15, 0.5, 0)
-      Title.Size = UDim2.new(1, -150, 1, 0)
-      Title.BackgroundTransparency = 1
-      Title.TextColor3 = Color3.fromRGB(240, 240, 240)
-      Title.TextTransparency = 1
-      Title.TextSize = 16
-      Title.Font = Enum.Font.GothamMedium
-      Title.TextXAlignment = Enum.TextXAlignment.Left
-      Title.Parent = Topbar
-   end
-   Topbar.Title.Text = Settings.Name]]
-         end,
-         1
-      )
+		-- Guard Topbar.Title access (may also be absent in some versions)
+		source = source:gsub(
+			"local Passthrough = false%s*\n%s*Topbar%.Title%.Text = Settings%.Name",
+			function()
+				return [[local Passthrough = false
+	pcall(function()
+		if Topbar:FindFirstChild("Title") then
+			Topbar.Title.Text = Settings.Name
+		end
+	end)]]
+			end,
+			1
+		)
+	end
 
-   end
-
-   local chunk, compileErr = loadstring(source)]==]
-   end,
-   1
+	local chunk, compileErr = loadstring(source)]==]
+	end,
+	1
 )
 
+-- ── After Rayfield loads successfully, clean up any stale instance ───────────
 source = source:gsub(
-   'print%("%[AI Chatbot%] Rayfield UI loaded successfully!"%)',
-   'print("[AI Chatbot] Rayfield UI loaded successfully!")\npcall(function()\n   if Rayfield and Rayfield.Destroy then\n      Rayfield:Destroy()\n   end\nend)',
-   1
+	'print%("%[AI Chatbot%] Rayfield UI loaded successfully!"%)',
+	'print("[AI Chatbot] Rayfield UI loaded successfully!")\npcall(function()\n\tif Rayfield and Rayfield.Destroy then\n\t\tRayfield:Destroy()\n\tend\nend)',
+	1
 )
 
+-- ── AutoGreet loop: suppress noisy print, prevent duplicate loop ─────────────
 local quietAutoGreetLoop = [==[
 local function AutoGreetLoop()
-   while true do
-      task.wait(15)
+	while true do
+		task.wait(15)
 
-      if Config.EnableAutoGreet and Config.ChatbotEnabled then
-         local now = tick()
-         local timeSinceActivity = now - AutoGreet.lastActivity
+		if Config.EnableAutoGreet and Config.ChatbotEnabled then
+			local now = tick()
+			local timeSinceActivity = now - AutoGreet.lastActivity
 
-         if timeSinceActivity >= Config.AutoGreetInterval then
-            local playerToGreet, distance = FindNearestPlayer()
+			if timeSinceActivity >= Config.AutoGreetInterval then
+				local playerToGreet, distance = FindNearestPlayer()
 
-            if playerToGreet then
-               local displayName = GetPlayerDisplayName(playerToGreet)
-               print("[AutoGreet] Greeting:", displayName, string.format("(@%s, %.1f studs)", playerToGreet.Name, distance))
-               local greeting = GenerateGreeting(playerToGreet)
+				if playerToGreet then
+					local displayName = GetPlayerDisplayName(playerToGreet)
+					print("[AutoGreet] Greeting:", displayName, string.format("(@%s, %.1f studs)", playerToGreet.Name, distance))
+					local greeting = GenerateGreeting(playerToGreet)
 
-               if Config.PathfindingEnabled and LoadedModules.Pathfinding then
-                  spawn(function()
-                     LoadedModules.Pathfinding.Navigate(playerToGreet.Name, "basic")
-                     task.wait(2)
-                     SendChatMessage(greeting)
-                  end)
-               else
-                  SendChatMessage(greeting)
-               end
+					if Config.PathfindingEnabled and LoadedModules.Pathfinding then
+						spawn(function()
+							LoadedModules.Pathfinding.Navigate(playerToGreet.Name, "basic")
+							task.wait(2)
+							SendChatMessage(greeting)
+						end)
+					else
+						SendChatMessage(greeting)
+					end
 
-               AutoGreet.greetedPlayers[playerToGreet.Name] = now
-               AutoGreet.lastActivity = now
-            end
-         end
-      end
-   end
+					AutoGreet.greetedPlayers[playerToGreet.Name] = now
+					AutoGreet.lastActivity = now
+				end
+			end
+		end
+	end
 end
 
 local autoGreetEnv = getgenv and getgenv() or _G
 if not autoGreetEnv.SSChatbotAutoGreetLoopActive then
-   autoGreetEnv.SSChatbotAutoGreetLoopActive = true
-   spawn(AutoGreetLoop)
+	autoGreetEnv.SSChatbotAutoGreetLoopActive = true
+	spawn(AutoGreetLoop)
 end
 ]==]
 
-source = source:gsub('local function AutoGreetLoop%(%)%s*.-spawn%(AutoGreetLoop%)', function() return quietAutoGreetLoop end, 1)
-source = source:gsub('Content = "Testing all 3 free models%.%.%.",', 'Content = "Testing all 3 free models with pauses...",', 1)
-source = source:gsub('wait%(2%) %-%- Longer delay between tests', 'wait(8) -- Give free upstream providers room between tests', 1)
+source = source:gsub(
+	'local function AutoGreetLoop%(%)%s*.-spawn%(AutoGreetLoop%)',
+	function() return quietAutoGreetLoop end,
+	1
+)
 
+-- ── Model test delays: give free providers breathing room ────────────────────
+source = source:gsub('Content = "Testing all 3 free models%.%.%.",',   'Content = "Testing all 3 free models with pauses...",')
+source = source:gsub('wait%(2%) %-%- Longer delay between tests',       'wait(8) -- Give free upstream providers room between tests')
+
+-- ── Remove duplicate tab declarations (hub declares them twice) ──────────────
 local duplicateTabBlock = [==[
 -- Create Tabs
 local ChatTab = Window:CreateTab("Chatbot", 4483362458)
@@ -174,49 +170,63 @@ local removedExact
 source, removedExact = source:gsub(duplicateTabBlock, "-- Tabs are created below, next to their actual UI content.", 1)
 
 if removedExact == 0 then
-   source = source:gsub(
-      "%-%- Create Tabs%s*\nlocal ChatTab = Window:CreateTab%(\"Chatbot\", 4483362458%)%s*\nlocal APITab = Window:CreateTab%(\"API Setup\", 4483362458%)%s*\nlocal PromptsTab = Window:CreateTab%(\"Prompts\", 4483362458%)%s*\nlocal DebugTab = Window:CreateTab%(\"Debug\", 4483362458%)%s*\nlocal ModulesTab = Window:CreateTab%(\"Modules\", 4483362458%)%s*\nlocal MemoryTab = Window:CreateTab%(\"Memory\", 4483362458%)%s*\nlocal SettingsTab = Window:CreateTab%(\"Settings\", 4483362458%)",
-      "-- Tabs are created below, next to their actual UI content.",
-      1
-   )
+	source = source:gsub(
+		"%-%- Create Tabs%s*\n"
+		.. 'local ChatTab = Window:CreateTab%("Chatbot", 4483362458%)%s*\n'
+		.. 'local APITab = Window:CreateTab%("API Setup", 4483362458%)%s*\n'
+		.. 'local PromptsTab = Window:CreateTab%("Prompts", 4483362458%)%s*\n'
+		.. 'local DebugTab = Window:CreateTab%("Debug", 4483362458%)%s*\n'
+		.. 'local ModulesTab = Window:CreateTab%("Modules", 4483362458%)%s*\n'
+		.. 'local MemoryTab = Window:CreateTab%("Memory", 4483362458%)%s*\n'
+		.. 'local SettingsTab = Window:CreateTab%("Settings", 4483362458%)',
+		"-- Tabs are created below, next to their actual UI content.",
+		1
+	)
 end
 
+-- ── Memory tab: wrap UI locals in a do-block so UpdateMemoryStats can see them
 source = source:gsub(
-   "MemoryTab = Window:CreateTab%(\"Memory\", 4483362458%)%s*\n%s*local MemorySection = MemoryTab:CreateSection%(\"Memory Statistics\"%)",
-   "MemoryTab = Window:CreateTab(\"Memory\", 4483362458)\n\ndo\nlocal MemorySection = MemoryTab:CreateSection(\"Memory Statistics\")",
-   1
+	'MemoryTab = Window:CreateTab%("Memory", 4483362458%)%s*\n%s*local MemorySection = MemoryTab:CreateSection%("Memory Statistics"%)',
+	'MemoryTab = Window:CreateTab("Memory", 4483362458)\n\ndo\nlocal MemorySection = MemoryTab:CreateSection("Memory Statistics")',
+	1
 )
 
 source = source:gsub(
-   "local GlobalMemorySlider = MemoryTab:CreateSlider%(%{(.-)\n%}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS & INFO",
-   function(sliderBody)
-      return "local GlobalMemorySlider = MemoryTab:CreateSlider({" .. sliderBody .. "\n})\n\n-- Initialize memory stats display while the memory UI locals are still in scope.\nUpdateMemoryStats()\nend\n\n-- ========================================\n-- TAB 7: SETTINGS & INFO"
-   end,
-   1
+	'local GlobalMemorySlider = MemoryTab:CreateSlider%(%{(.-)%s*\n%}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS %& INFO',
+	function(sliderBody)
+		return 'local GlobalMemorySlider = MemoryTab:CreateSlider({' .. sliderBody
+			.. '\n})\n\n'
+			.. '-- Initialize memory stats display while the memory UI locals are still in scope.\n'
+			.. 'UpdateMemoryStats()\nend\n\n'
+			.. '-- ========================================\n-- TAB 7: SETTINGS & INFO'
+	end,
+	1
+)
+
+-- ── Settings tab: same do-block treatment ───────────────────────────────────
+source = source:gsub(
+	'SettingsTab = Window:CreateTab%("Settings", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%("Information"%)',
+	'SettingsTab = Window:CreateTab("Settings", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection("Information")',
+	1
 )
 
 source = source:gsub(
-   "SettingsTab = Window:CreateTab%(\"Settings\", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%(\"Information\"%)",
-   "SettingsTab = Window:CreateTab(\"Settings\", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection(\"Information\")",
-   1
+	'%-%- Initialize memory stats display%s*\nUpdateMemoryStats%(%)%s*\n%s*Rayfield:Notify%(%{',
+	'end\n\nRayfield:Notify({',
+	1
 )
 
-source = source:gsub(
-   "%-%- Initialize memory stats display%s*\nUpdateMemoryStats%(%)%s*\n%s*Rayfield:Notify%(%{",
-   "end\n\nRayfield:Notify({",
-   1
-)
-
+-- ── Compile & run ────────────────────────────────────────────────────────────
 local chunk, compileErr = loadstring(source)
 if not chunk then
-   error("[SS Chatbot] compile failed: " .. tostring(compileErr))
+	error("[SS Chatbot] compile failed: " .. tostring(compileErr))
 end
 
 print("[SS Chatbot] source compiled. Starting original hub...")
 
 local okRun, runtimeErr = pcall(chunk)
 if not okRun then
-   error("[SS Chatbot] runtime failed: " .. tostring(runtimeErr))
+	error("[SS Chatbot] runtime failed: " .. tostring(runtimeErr))
 end
 
 print("[SS Chatbot] original hub started")
