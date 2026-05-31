@@ -1,9 +1,14 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies Luau compile fixes, then runs it.
 
-print("[SS Chatbot] loader v12 started")
+print("[SS Chatbot] loader v13 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
+local DEFAULT_OPENROUTER_KEY = table.concat({
+   "sk-or-v1-fb43347952a4ca51",
+   "e587a591bd1a8bb6e8af00aa",
+   "123037573a602e4b9a61790c"
+})
 
 local okFetch, source = pcall(function()
    return game:HttpGet(SOURCE_URL, true)
@@ -16,6 +21,13 @@ end
 if type(source) ~= "string" or source == "" then
    error("[SS Chatbot] Empty source from GitHub")
 end
+
+-- Seed the script's default custom OpenRouter key.
+source = source:gsub(
+   'ApiKey = "",',
+   'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",',
+   1
+)
 
 -- The original script creates an empty set of tabs first, then creates the real
 -- tabs again where the UI content is added. Remove the empty first set.
