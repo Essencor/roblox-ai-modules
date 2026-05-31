@@ -10,7 +10,7 @@ local function escapePattern(text)
 	return (text:gsub("([^%w])", "%%%1"))
 end
 
--- ── Fetch hub source ─────────────────────────────────────────────────────────
+-- ── Fetch hub source ────────────────────────────────────────────────────────
 local okFetch, source = pcall(function()
 	return game:HttpGet(SOURCE_URL, true)
 end)
@@ -200,7 +200,7 @@ local function AutoGreetLoop()
 	end
 end
 
-local autoGreetEnv = getgenv and getgenv() or _G
+local autoGreetEnv = (getgenv and getgenv()) or _G
 if not autoGreetEnv.SSChatbotAutoGreetLoopActive then
 	autoGreetEnv.SSChatbotAutoGreetLoopActive = true
 	spawn(AutoGreetLoop)
@@ -255,7 +255,7 @@ source = source:gsub(
 )
 
 source = source:gsub(
-	'local GlobalMemorySlider = MemoryTab:CreateSlider%(%{(.-)%s*\n%}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS %& INFO',
+	'local GlobalMemorySlider = MemoryTab:CreateSlider%(%{(.-)%s*\n%}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS & INFO',
 	function(sliderBody)
 		return 'local GlobalMemorySlider = MemoryTab:CreateSlider({' .. sliderBody
 			.. '\n})\n\n'
