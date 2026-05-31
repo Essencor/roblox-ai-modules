@@ -75,8 +75,7 @@ pcall(function()
 	if not Rayfield then return end
 	local Main = Rayfield:FindFirstChild("Main")
 	if not Main then return end
-	local Topbar = Main:FindFirstChild("Topbar")
-
+	
 	-- Main.Shadow + Main.Shadow.Image
 	if not Main:FindFirstChild("Shadow") then
 		local Shadow = Instance.new("Frame")
@@ -105,6 +104,7 @@ pcall(function()
 		Img.Parent = Main.Shadow
 	end
 
+	local Topbar = Main:FindFirstChild("Topbar")
 	if Topbar then
 		-- Topbar.Title
 		if not Topbar:FindFirstChild("Title") then
