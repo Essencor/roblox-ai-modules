@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
-print("[SS Chatbot] loader v23 started")
+print("[SS Chatbot] loader v24 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = table.concat({
@@ -63,18 +63,6 @@ source = source:gsub(
 source = source:gsub(
    'print%("%[AI Chatbot%] Rayfield UI loaded successfully!"%)',
    'print("[AI Chatbot] Rayfield UI loaded successfully!")\npcall(function()\n   if Rayfield and Rayfield.Destroy then\n      Rayfield:Destroy()\n   end\nend)',
-   1
-)
-
-source = source:gsub(
-   'local Window = Rayfield:CreateWindow%(%{',
-   'local Window = Rayfield:CreateWindow({\n   Icon = 0,\n   ShowText = "SS Hub",\n   Theme = "Default",\n   ToggleUIKeybind = "K",\n   DisableRayfieldPrompts = true,\n   DisableBuildWarnings = true,',
-   1
-)
-
-source = source:gsub(
-   'LoadingSubtitle = "by SS"%s*\n%s*}%)',
-   'LoadingSubtitle = "by SS"\n})\nif getgenv then\n   getgenv().SSChatbotWindow = Window\nend',
    1
 )
 
