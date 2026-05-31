@@ -47,9 +47,29 @@ local LocalPlayer = Players.LocalPlayer
 -- Load Rayfield UI Library
 print("[AI Chatbot] Loading Rayfield UI...")
 
+local function loadRemoteChunk(url, label)
+   local source = game:HttpGet(url, true)
+   local chunk, compileErr = loadstring(source)
+
+   if not chunk then
+      error(string.format("[AI Chatbot] %s loadstring failed: %s", label, tostring(compileErr)))
+   end
+
+   local ok, result = pcall(chunk)
+   if not ok then
+      error(string.format("[AI Chatbot] %s runtime failed: %s", label, tostring(result)))
+   end
+
+   if result == nil then
+      error(string.format("[AI Chatbot] %s returned nil", label))
+   end
+
+   return result
+end
+
 local Rayfield
 local success, err = pcall(function()
-   Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+   Rayfield = loadRemoteChunk("https://sirius.menu/rayfield", "Rayfield")
 end)
 
 if not success or not Rayfield then
@@ -123,7 +143,7 @@ local AutoGreet = {
 -- Module URLs
 local ModuleURLs = {
    Actions = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/main/actions-basic.lua",
-   Pathfinding = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/refs/heads/main/pathfinding-module"
+   Pathfinding = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/main/pathfinding-module"
 }
 
 -- Loaded Modules Storage
@@ -3560,7 +3580,7 @@ local AutoGreetDistanceSlider = ModulesTab:CreateSlider({
 -- TAB 6: MEMORY SYSTEM
 -- ========================================
 
-local MemoryTab = Window:CreateTab("Memory", 4483362458)
+MemoryTab = Window:CreateTab("Memory", 4483362458)
 
 local MemorySection = MemoryTab:CreateSection("Memory Statistics")
 
@@ -3839,7 +3859,7 @@ local GlobalMemorySlider = MemoryTab:CreateSlider({
 -- TAB 7: SETTINGS & INFO
 -- ========================================
 
-local SettingsTab = Window:CreateTab("Settings", 4483362458)
+SettingsTab = Window:CreateTab("Settings", 4483362458)
 
 local InfoSection = SettingsTab:CreateSection("Information")
 
