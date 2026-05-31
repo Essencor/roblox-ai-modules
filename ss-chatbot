@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
-print("[SS Chatbot] loader v26 started")
+print("[SS Chatbot] loader v27 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = table.concat({
@@ -66,6 +66,50 @@ source = source:gsub(
       return [==[local source = game:HttpGet(url, true)
 
    if label == "Rayfield" then
+      source = source:gsub(
+         "local Topbar = Main%.Topbar%s*\nlocal Elements = Main%.Elements",
+         function()
+            return [[local Topbar = Main.Topbar
+
+   if not Topbar:FindFirstChild("Title") then
+      local Title = Instance.new("TextLabel")
+      Title.Name = "Title"
+      Title.AnchorPoint = Vector2.new(0, 0.5)
+      Title.Position = UDim2.new(0, 15, 0.5, 0)
+      Title.Size = UDim2.new(1, -150, 1, 0)
+      Title.BackgroundTransparency = 1
+      Title.TextColor3 = Color3.fromRGB(240, 240, 240)
+      Title.TextTransparency = 1
+      Title.TextSize = 16
+      Title.Font = Enum.Font.GothamMedium
+      Title.TextXAlignment = Enum.TextXAlignment.Left
+      Title.Parent = Topbar
+   end
+
+   if not Main:FindFirstChild("Shadow") then
+      local Shadow = Instance.new("Frame")
+      Shadow.Name = "Shadow"
+      Shadow.BackgroundTransparency = 1
+      Shadow.Size = UDim2.new(1, 36, 1, 36)
+      Shadow.Position = UDim2.new(0, -18, 0, -18)
+      Shadow.ZIndex = Main.ZIndex - 1
+      Shadow.Parent = Main
+
+      local Image = Instance.new("ImageLabel")
+      Image.Name = "Image"
+      Image.BackgroundTransparency = 1
+      Image.Size = UDim2.new(1, 0, 1, 0)
+      Image.ImageTransparency = 1
+      Image.ScaleType = Enum.ScaleType.Slice
+      Image.SliceCenter = Rect.new(49, 49, 450, 450)
+      Image.Parent = Shadow
+   end
+
+   local Elements = Main.Elements]]
+         end,
+         1
+      )
+
       source = source:gsub(
          "local Passthrough = false%s*\n%s*Topbar%.Title%.Text = Settings%.Name",
          function()
@@ -185,7 +229,7 @@ source = source:gsub(
 
 source = source:gsub(
    "SettingsTab = Window:CreateTab%(\"Settings\", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%(\"Information\"%)",
-   "SettingsTab = Window:CreateTab(\"Settings\", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection(\"Information\")",
+   "SettingsTab = Window:CreateTab(\"Settings\", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection(\"Information")",
    1
 )
 
