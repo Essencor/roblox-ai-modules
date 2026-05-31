@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies Luau compile fixes, then runs it.
 
-print("[SS Chatbot] loader v9 started")
+print("[SS Chatbot] loader v10 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 
@@ -26,7 +26,7 @@ source = source:gsub(
 )
 
 source = source:gsub(
-   "local GlobalMemorySlider = MemoryTab:CreateSlider%(%{(.-)%n%}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS & INFO",
+   "local GlobalMemorySlider = MemoryTab:CreateSlider%(%{(.-)\n%}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS & INFO",
    function(sliderBody)
       return "local GlobalMemorySlider = MemoryTab:CreateSlider({" .. sliderBody .. "\n})\n\n-- Initialize memory stats display while the memory UI locals are still in scope.\nUpdateMemoryStats()\nend\n\n-- ========================================\n-- TAB 7: SETTINGS & INFO"
    end
