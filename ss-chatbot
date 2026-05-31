@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies Luau compile fixes, then runs it.
 
-print("[SS Chatbot] loader v17 started")
+print("[SS Chatbot] loader v18 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = table.concat({
@@ -21,6 +21,10 @@ local BUILT_IN_KEY_REPLACEMENTS = {
    "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",
    "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"
 }
+
+local function escapePattern(text)
+   return (text:gsub("([^%w])", "%%%1"))
+end
 
 local okFetch, source = pcall(function()
    return game:HttpGet(SOURCE_URL, true)
@@ -43,18 +47,107 @@ source = source:gsub(
 
 -- Swap the public free model IDs everywhere they appear, including defaults and dropdown options.
 for oldModel, newModel in pairs(MODEL_REPLACEMENTS) do
-   source = source:gsub(oldModel:gsub("%-", "%%-"), newModel)
+   source = source:gsub(escapePattern(oldModel), newModel)
 end
 
 -- Replace all bundled OpenRouter keys with the current key.
 for _, oldKey in ipairs(BUILT_IN_KEY_REPLACEMENTS) do
-   source = source:gsub(oldKey:gsub("%-", "%%-"), DEFAULT_OPENROUTER_KEY)
+   source = source:gsub(escapePattern(oldKey), DEFAULT_OPENROUTER_KEY)
 end
 
 -- Make API calls prefer Config.ApiKey when it has a default/custom value.
 source = source:gsub(
    'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
    'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]',
+   1
+)
+
+-- Let OpenRouter route away from overloaded providers when a model has alternatives.
+source = source:gsub(
+   'max_tokens = 80  %-%- Reduced to ensure shorter responses',
+   'max_tokens = 80,  -- Reduced to ensure shorter responses\n      provider = {\n         allow_fallbacks = true,\n         sort = "throughput"\n      }',
+   1
+)
+
+-- Clean up an earlier Rayfield instance before creating a new UI. Re-running the loadstring otherwise leaves stale UI state behind.
+source = source:gsub(
+   'print%("%[AI Chatbot%] Rayfield UI loaded successfully!"%)',
+   'print("[AI Chatbot] Rayfield UI loaded successfully!")\npcall(function()\n   if Rayfield and Rayfield.Destroy then\n      Rayfield:Destroy()\n   end\nend)',
+   1
+)
+
+-- Use explicit current Rayfield options so the window starts consistently across reloads.
+source = source:gsub(
+   'local Window = Rayfield:CreateWindow%(%{',
+   'local Window = Rayfield:CreateWindow({\n   Icon = 0,\n   ShowText = "SS Hub",\n   Theme = "Default",\n   ToggleUIKeybind = "RightShift",\n   DisableRayfieldPrompts = true,\n   DisableBuildWarnings = true,',
+   1
+)
+
+source = source:gsub(
+   'LoadingSubtitle = "by SS"\n%}%))',
+   'LoadingSubtitle = "by SS"\n})\nif getgenv then\n   getgenv().SSChatbotWindow = Window\nend',
+   1
+)
+
+-- Replace the noisy AutoGreet loop with a guarded quiet loop. This prevents repeated loadstring runs from stacking loops.
+local quietAutoGreetLoop = [==[
+local function AutoGreetLoop()
+   while true do
+      task.wait(15)
+
+      if Config.EnableAutoGreet and Config.ChatbotEnabled then
+         local now = tick()
+         local timeSinceActivity = now - AutoGreet.lastActivity
+
+         if timeSinceActivity >= Config.AutoGreetInterval then
+            local playerToGreet, distance = FindNearestPlayer()
+
+            if playerToGreet then
+               local displayName = GetPlayerDisplayName(playerToGreet)
+               print("[AutoGreet] Greeting:", displayName, string.format("(@%s, %.1f studs)", playerToGreet.Name, distance))
+
+               local greeting = GenerateGreeting(playerToGreet)
+
+               if Config.PathfindingEnabled and LoadedModules.Pathfinding then
+                  spawn(function()
+                     LoadedModules.Pathfinding.Navigate(playerToGreet.Name, "basic")
+                     task.wait(2)
+                     SendChatMessage(greeting)
+                  end)
+               else
+                  SendChatMessage(greeting)
+               end
+
+               AutoGreet.greetedPlayers[playerToGreet.Name] = now
+               AutoGreet.lastActivity = now
+            end
+         end
+      end
+   end
+end
+
+local autoGreetEnv = getgenv and getgenv() or _G
+if not autoGreetEnv.SSChatbotAutoGreetLoopActive then
+   autoGreetEnv.SSChatbotAutoGreetLoopActive = true
+   spawn(AutoGreetLoop)
+end
+]==]
+
+source = source:gsub(
+   'local function AutoGreetLoop%(%)%s*.-spawn%(AutoGreetLoop%)',
+   quietAutoGreetLoop,
+   1
+)
+
+-- The model tester was making three back-to-back free-provider requests. Slow it down to avoid self-inflicted 429s.
+source = source:gsub(
+   'Content = "Testing all 3 free models%.%.%.",',
+   'Content = "Testing all 3 free models with pauses...",',
+   1
+)
+source = source:gsub(
+   'wait%(2%) %-%- Longer delay between tests',
+   'wait(8) -- Give free upstream providers room between tests',
    1
 )
 
