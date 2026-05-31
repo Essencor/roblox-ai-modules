@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies Luau compile fixes, then runs it.
 
-print("[SS Chatbot] loader v16 started")
+print("[SS Chatbot] loader v17 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = table.concat({
@@ -9,6 +9,18 @@ local DEFAULT_OPENROUTER_KEY = table.concat({
    "e587a591bd1a8bb6e8af00aa",
    "123037573a602e4b9a61790c"
 })
+
+local MODEL_REPLACEMENTS = {
+   ["tngtech/deepseek-r1t2-chimera:free"] = "google/gemma-4-31b-it:free",
+   ["mistralai/devstral-2512:free"] = "nousresearch/hermes-3-llama-3.1-405b:free",
+   ["xiaomi/mimo-v2-flash:free"] = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
+}
+
+local BUILT_IN_KEY_REPLACEMENTS = {
+   "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",
+   "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",
+   "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"
+}
 
 local okFetch, source = pcall(function()
    return game:HttpGet(SOURCE_URL, true)
@@ -29,17 +41,20 @@ source = source:gsub(
    1
 )
 
+-- Swap the public free model IDs everywhere they appear, including defaults and dropdown options.
+for oldModel, newModel in pairs(MODEL_REPLACEMENTS) do
+   source = source:gsub(oldModel:gsub("%-", "%%-"), newModel)
+end
+
+-- Replace all bundled OpenRouter keys with the current key.
+for _, oldKey in ipairs(BUILT_IN_KEY_REPLACEMENTS) do
+   source = source:gsub(oldKey:gsub("%-", "%%-"), DEFAULT_OPENROUTER_KEY)
+end
+
 -- Make API calls prefer Config.ApiKey when it has a default/custom value.
 source = source:gsub(
    'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
    'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]',
-   1
-)
-
--- Replace the exact built-in key used by the default free model as a fallback.
-source = source:gsub(
-   '"sk%-or%-v1%-e5c95e66cabfa4eb03398d4dc14d03eb835261f0d51d63c17d2c87ba62f92ae5"',
-   '"' .. DEFAULT_OPENROUTER_KEY .. '"',
    1
 )
 
