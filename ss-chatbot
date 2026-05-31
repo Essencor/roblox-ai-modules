@@ -1,7 +1,7 @@
--- SS Chatbot public loader
+-- SS Chatbot public loader v35
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
-print("[SS Chatbot] loader v34 started")
+print("[SS Chatbot] loader v35 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = "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"
@@ -10,6 +10,7 @@ local function escapePattern(text)
 	return (text:gsub("([^%w])", "%%%1"))
 end
 
+-- ── Fetch hub source ─────────────────────────────────────────────────────────
 local okFetch, source = pcall(function()
 	return game:HttpGet(SOURCE_URL, true)
 end)
@@ -30,9 +31,9 @@ source = source:gsub(escapePattern("sk-or-v1-23670df3e8d9c921af977a4e9202c2a750e
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 
 -- ── Model replacements ───────────────────────────────────────────────────────
-source = source:gsub(escapePattern("tngtech/deepseek-r1t2-chimera:free"),    "google/gemma-4-31b-it:free")
-source = source:gsub(escapePattern("mistralai/devstral-2512:free"),           "nousresearch/hermes-3-llama-3.1-405b:free")
-source = source:gsub(escapePattern("xiaomi/mimo-v2-flash:free"),              "cognitivecomputations/dolphin-mistral-24b-venice-edition:free")
+source = source:gsub(escapePattern("tngtech/deepseek-r1t2-chimera:free"),  "google/gemma-4-31b-it:free")
+source = source:gsub(escapePattern("mistralai/devstral-2512:free"),         "nousresearch/hermes-3-llama-3.1-405b:free")
+source = source:gsub(escapePattern("xiaomi/mimo-v2-flash:free"),            "cognitivecomputations/dolphin-mistral-24b-venice-edition:free")
 
 -- ── API key selection: prefer user-set key over model-specific key ───────────
 source = source:gsub(
@@ -48,53 +49,69 @@ source = source:gsub(
 	1
 )
 
--- ── Patch the inner loadRemoteChunk so we can intercept the Rayfield source ──
+-- ── Shadow fix ───────────────────────────────────────────────────────────────
+-- From reading Rayfield's actual source, the crash happens inside Rayfield's
+-- OWN code in two places:
 --
--- Strategy for the Shadow crash:
---   Rayfield animates Main.Shadow.Image.ImageTransparency via TweenService.
---   In some executor environments Main.Shadow doesn't get created, so every
---   reference to it throws "Shadow is not a valid member of Frame 'Main'".
---   The safest fix is to patch Rayfield's source AFTER it is fetched but
---   BEFORE it is loadstring'd, wrapping every Main.Shadow statement in a
---   pcall so failures are silent instead of fatal.
+-- 1) The asset setup do-block (runs immediately):
+--      Rayfield.Main.Shadow.Image.Image = customAssets[...]
+--      Rayfield.Main.Shadow.Image.ImageColor3 = SelectedTheme.Shadow
+--
+-- 2) ChangeTheme() function (called later):
+--      Rayfield.Main.Shadow.Image.ImageColor3 = SelectedTheme.Shadow
+--
+-- Rayfield fetches its own source via loadWithTimeout("https://sirius.menu/rayfield")
+-- and runs it directly — we cannot intercept that from the hub loader's
+-- loadRemoteChunk patch easily because Rayfield loads itself.
+--
+-- The correct fix: patch the hub source to wrap the Rayfield load call so that
+-- BEFORE the result is used, we walk the returned ScreenGui and ensure
+-- Main.Shadow and Main.Shadow.Image exist.
+--
+-- The hub source has:
+--   local Rayfield
+--   local success, err = pcall(function()
+--      Rayfield = loadRemoteChunk("https://sirius.menu/rayfield", "Rayfield")
+--   end)
+--   if not success or not Rayfield then ... end
+--
+-- We replace it with a version that repairs Rayfield.Main.Shadow after load.
+
 source = source:gsub(
-	'local source = game:HttpGet%(url, true%)%s*\n%s*local chunk, compileErr = loadstring%(source%)',
-	function()
-		return [==[local source = game:HttpGet(url, true)
+	'local Rayfield\nlocal success, err = pcall%(function%(%)%s*\n%s*Rayfield = loadRemoteChunk%("https://sirius%.menu/rayfield", "Rayfield"%)\nend%)',
+	[[local Rayfield
+local success, err = pcall(function()
+	Rayfield = loadRemoteChunk("https://sirius.menu/rayfield", "Rayfield")
+end)
 
-	if label == "Rayfield" then
-		-- Wrap every bare Main.Shadow.* statement in a pcall so that
-		-- executors where Shadow is missing don't crash Rayfield.
-		source = source:gsub(
-			'([ \t]*)(TweenService:Create%b()%s*:Play%(%))([^\n]*Main%.Shadow[^\n]*)',
-			'%1pcall(function() %2%3 end)'
-		)
-		source = source:gsub(
-			'([ \t]*)(Main%.Shadow%.[^\n]+)',
-			'%1pcall(function() %2 end)'
-		)
-
-		-- Guard Topbar.Title access (may also be absent in some versions)
-		source = source:gsub(
-			"local Passthrough = false%s*\n%s*Topbar%.Title%.Text = Settings%.Name",
-			function()
-				return [[local Passthrough = false
-	pcall(function()
-		if Topbar:FindFirstChild("Title") then
-			Topbar.Title.Text = Settings.Name
-		end
-	end)]]
-			end,
-			1
-		)
+-- Ensure Shadow exists on Rayfield.Main so executor environments where
+-- the ScreenGui asset loads without all children don't crash Rayfield.
+pcall(function()
+	if not Rayfield then return end
+	local Main = Rayfield:FindFirstChild("Main")
+	if not Main then return end
+	if not Main:FindFirstChild("Shadow") then
+		local Shadow = Instance.new("Frame")
+		Shadow.Name = "Shadow"
+		Shadow.BackgroundTransparency = 1
+		Shadow.Size = UDim2.new(1, 36, 1, 36)
+		Shadow.Position = UDim2.new(0, -18, 0, -18)
+		Shadow.ZIndex = Main.ZIndex - 1
+		Shadow.Parent = Main
+		local Image = Instance.new("ImageLabel")
+		Image.Name = "Image"
+		Image.BackgroundTransparency = 1
+		Image.Size = UDim2.new(1, 0, 1, 0)
+		Image.ImageTransparency = 1
+		Image.ScaleType = Enum.ScaleType.Slice
+		Image.SliceCenter = Rect.new(49, 49, 450, 450)
+		Image.Parent = Shadow
 	end
-
-	local chunk, compileErr = loadstring(source)]==]
-	end,
+end)]],
 	1
 )
 
--- ── After Rayfield loads successfully, clean up any stale instance ───────────
+-- ── After Rayfield loads, clean up any stale instance ───────────────────────
 source = source:gsub(
 	'print%("%[AI Chatbot%] Rayfield UI loaded successfully!"%)',
 	'print("[AI Chatbot] Rayfield UI loaded successfully!")\npcall(function()\n\tif Rayfield and Rayfield.Destroy then\n\t\tRayfield:Destroy()\n\tend\nend)',
@@ -150,11 +167,11 @@ source = source:gsub(
 	1
 )
 
--- ── Model test delays: give free providers breathing room ────────────────────
-source = source:gsub('Content = "Testing all 3 free models%.%.%.",',   'Content = "Testing all 3 free models with pauses...",')
-source = source:gsub('wait%(2%) %-%- Longer delay between tests',       'wait(8) -- Give free upstream providers room between tests')
+-- ── Model test delays ────────────────────────────────────────────────────────
+source = source:gsub('Content = "Testing all 3 free models%.%.%.",',  'Content = "Testing all 3 free models with pauses...",')
+source = source:gsub('wait%(2%) %-%- Longer delay between tests',      'wait(8) -- Give free upstream providers room between tests')
 
--- ── Remove duplicate tab declarations (hub declares them twice) ──────────────
+-- ── Remove duplicate tab declarations ───────────────────────────────────────
 local duplicateTabBlock = [==[
 -- Create Tabs
 local ChatTab = Window:CreateTab("Chatbot", 4483362458)
@@ -184,7 +201,7 @@ if removedExact == 0 then
 	)
 end
 
--- ── Memory tab: wrap UI locals in a do-block so UpdateMemoryStats can see them
+-- ── Memory tab: wrap UI locals in do-block ───────────────────────────────────
 source = source:gsub(
 	'MemoryTab = Window:CreateTab%("Memory", 4483362458%)%s*\n%s*local MemorySection = MemoryTab:CreateSection%("Memory Statistics"%)',
 	'MemoryTab = Window:CreateTab("Memory", 4483362458)\n\ndo\nlocal MemorySection = MemoryTab:CreateSection("Memory Statistics")',
