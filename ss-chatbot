@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
-print("[SS Chatbot] loader v25 started")
+print("[SS Chatbot] loader v26 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = table.concat({
@@ -63,7 +63,7 @@ source = source:gsub(
 source = source:gsub(
    'local source = game:HttpGet%(url, true%)%s*\n%s*local chunk, compileErr = loadstring%(source%)',
    function()
-      return [[local source = game:HttpGet(url, true)
+      return [==[local source = game:HttpGet(url, true)
 
    if label == "Rayfield" then
       source = source:gsub(
@@ -90,7 +90,7 @@ source = source:gsub(
       )
    end
 
-   local chunk, compileErr = loadstring(source)]]
+   local chunk, compileErr = loadstring(source)]==]
    end,
    1
 )
