@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies Luau compile fixes, then runs it.
 
-print("[SS Chatbot] loader v14 started")
+print("[SS Chatbot] loader v15 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = table.concat({
@@ -29,10 +29,10 @@ source = source:gsub(
    1
 )
 
--- Make the default free model use the same key so it does not override Config.ApiKey.
+-- Replace the exact built-in key used by the default free model.
 source = source:gsub(
-   '(["]mistralai/devstral%-2512:free["]%s*=%s*)["].-["],',
-   '%1"' .. DEFAULT_OPENROUTER_KEY .. '",',
+   '"sk%-or%-v1%-e5c95e66cabfa4eb03398d4dc14d03eb835261f0d51d63c17d2c87ba62f92ae5"',
+   '"' .. DEFAULT_OPENROUTER_KEY .. '"',
    1
 )
 
