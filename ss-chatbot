@@ -10,7 +10,7 @@ local function escapePattern(text)
 	return (text:gsub("([^%w])", "%%%1"))
 end
 
--- ── Fetch hub source ─────────────────────────────────────────────────────────
+-- ── Fetch hub source ────────────────────────────────────────────────────────
 local okFetch, source = pcall(function()
 	return game:HttpGet(SOURCE_URL, true)
 end)
@@ -23,7 +23,7 @@ if type(source) ~= "string" or source == "" then
 	error("[SS Chatbot] Empty source from GitHub")
 end
 
--- ── API key: inject default and replace all hardcoded keys ──────────────────
+-- ── API key: inject default and replace all hardcoded keys ─────────────────
 source = source:gsub('ApiKey = "",', 'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",', 1)
 
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
@@ -35,7 +35,7 @@ source = source:gsub(escapePattern("tngtech/deepseek-r1t2-chimera:free"),  "goog
 source = source:gsub(escapePattern("mistralai/devstral-2512:free"),         "nousresearch/hermes-3-llama-3.1-405b:free")
 source = source:gsub(escapePattern("xiaomi/mimo-v2-flash:free"),            "cognitivecomputations/dolphin-mistral-24b-venice-edition:free")
 
--- ── API key selection: prefer user-set key over model-specific key ───────────
+-- ── API key selection: prefer user-set key over model-specific key ──────────
 source = source:gsub(
 	'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
 	'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]',
@@ -157,7 +157,7 @@ end)]],
 	1
 )
 
--- ── After Rayfield loads, clean up any stale instance ───────────────────────
+-- ── After Rayfield loads, clean up any stale instance ──────────────────────
 source = source:gsub(
 	'print%("%[AI Chatbot%] Rayfield UI loaded successfully!"%)',
 	'print("[AI Chatbot] Rayfield UI loaded successfully!")\npcall(function()\n\tif Rayfield and Rayfield.Destroy then\n\t\tRayfield:Destroy()\n\tend\nend)',
@@ -255,7 +255,7 @@ source = source:gsub(
 )
 
 source = source:gsub(
-	'local GlobalMemorySlider = MemoryTab:CreateSlider%(%{(.-)%s*\n%}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS %& INFO',
+	'local GlobalMemorySlider = MemoryTab:CreateSlider%({(.-)%s*\n}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS & INFO',
 	function(sliderBody)
 		return 'local GlobalMemorySlider = MemoryTab:CreateSlider({' .. sliderBody
 			.. '\n})\n\n'
@@ -266,7 +266,7 @@ source = source:gsub(
 	1
 )
 
--- ── Settings tab: same do-block treatment ───────────────────────────────────
+-- ── Settings tab: same do-block treatment ──────────────────────────────────
 source = source:gsub(
 	'SettingsTab = Window:CreateTab%("Settings", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%("Information"%)',
 	'SettingsTab = Window:CreateTab("Settings", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection("Information")',
@@ -274,7 +274,7 @@ source = source:gsub(
 )
 
 source = source:gsub(
-	'%-%- Initialize memory stats display%s*\nUpdateMemoryStats%(%)%s*\n%s*Rayfield:Notify%(%{',
+	'%-%- Initialize memory stats display%s*\nUpdateMemoryStats%(%)%s*\n%s*Rayfield:Notify%({',
 	'end\n\nRayfield:Notify({',
 	1
 )
