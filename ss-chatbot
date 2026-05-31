@@ -1,12 +1,11 @@
--- SS Chatbot Starter for Roblox
--- Safe self-running client script with optional Rayfield UI.
--- If external UI or HTTP helpers fail, the script falls back to console-only mode
--- instead of throwing a nil-call on startup.
+-- SS Chatbot for Roblox
+-- Self-running client script with a visible setup panel and chat listener.
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
-local StarterGui = game:GetService("StarterGui")
 local TextChatService = game:GetService("TextChatService")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
@@ -14,71 +13,25 @@ if not LocalPlayer then
 	return
 end
 
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
 local Config = {
 	Enabled = true,
 	BotName = "SS Assistant",
 	ApiKey = "",
 	Model = "mistralai/devstral-2512:free",
-	Prefix = "!",
-	MinDelay = 2,
-	SystemPrompt = "You are a helpful Roblox chatbot for developers. Keep replies short, clear, and friendly.",
+	Prefix = "!ai",
+	Cooldown = 2,
+	MaxTokens = 120,
+	SystemPrompt = "You are a helpful Roblox chatbot for developers. Keep replies short, clear, friendly, and appropriate for Roblox chat.",
 }
 
 local lastReplyAt = 0
 local pendingRequest = false
-local recentUserReply = {}
+local seenMessages = {}
 
-local function safeHttpGet(url)
-	local ok, result = pcall(function()
-		return game:HttpGet(url, true)
-	end)
-
-	if ok and type(result) == "string" and #result > 0 then
-		return result
-	end
-
-	return nil, result
-end
-
-local function loadRemoteChunk(url, label)
-	local source, sourceErr = safeHttpGet(url)
-	if not source then
-		return nil, string.format("%s fetch failed: %s", label, tostring(sourceErr))
-	end
-
-	local chunk, compileErr = loadstring(source)
-	if not chunk then
-		return nil, string.format("%s loadstring failed: %s", label, tostring(compileErr))
-	end
-
-	local ok, result = pcall(chunk)
-	if not ok then
-		return nil, string.format("%s runtime failed: %s", label, tostring(result))
-	end
-
-	return result
-end
-
-local function tryLoadRayfield()
-	local ok, result = pcall(function()
-		return loadRemoteChunk("https://sirius.menu/rayfield", "Rayfield")
-	end)
-
-	if ok and result then
-		return result
-	end
-
-	warn("[SS Chatbot] Rayfield unavailable: " .. tostring(result))
-	return nil
-end
-
-local Rayfield = tryLoadRayfield()
-
-local function httpRequest(url, method, headers, body)
-	local requestFn = (syn and syn.request)
-		or (http and http.request)
-		or http_request
-		or request
+local function executorRequest(url, method, headers, body)
+	local requestFn = (syn and syn.request) or (http and http.request) or http_request or request
 
 	if requestFn then
 		local response = requestFn({
@@ -95,18 +48,18 @@ local function httpRequest(url, method, headers, body)
 		return false, tostring(response), 0
 	end
 
-	local requestOptions = {
+	local options = {
 		Url = url,
 		Method = method or "GET",
 		Headers = headers or {},
 	}
 
 	if body then
-		requestOptions.Body = body
+		options.Body = body
 	end
 
 	local ok, response = pcall(function()
-		return HttpService:RequestAsync(requestOptions)
+		return HttpService:RequestAsync(options)
 	end)
 
 	if ok and type(response) == "table" then
@@ -116,152 +69,399 @@ local function httpRequest(url, method, headers, body)
 	return false, tostring(response), 0
 end
 
-local function setStatus(text)
-	print("[SS Chatbot] " .. text)
-	if Rayfield and Rayfield.Notify then
-		pcall(function()
-			Rayfield:Notify({
-				Title = "SS Chatbot",
-				Content = text,
-				Duration = 3,
-			})
-		end)
+local function getGeneralChannel()
+	local channels = TextChatService:FindFirstChild("TextChannels")
+	if not channels then
+		return nil
 	end
+
+	return channels:FindFirstChild("RBXGeneral") or channels:FindFirstChildWhichIsA("TextChannel")
 end
 
-local function sendSystemMessage(text)
-	local channels = TextChatService:FindFirstChild("TextChannels")
-	if channels then
-		local general = channels:FindFirstChild("RBXGeneral")
-		if general and general.DisplaySystemMessage then
-			pcall(function()
-				general:DisplaySystemMessage(text)
-			end)
-			return
-		end
+local function displayMessage(text)
+	local channel = getGeneralChannel()
+	if channel and channel.DisplaySystemMessage then
+		pcall(function()
+			channel:DisplaySystemMessage(text)
+		end)
+		return
 	end
 
 	pcall(function()
 		StarterGui:SetCore("ChatMakeSystemMessage", {
 			Text = text,
-			Color = Color3.fromRGB(180, 220, 255),
+			Color = Color3.fromRGB(120, 205, 255),
 			Font = Enum.Font.SourceSansBold,
 			TextSize = 18,
 		})
 	end)
 end
 
-local function buildMessages(userMessage)
-	return {
-		{ role = "system", content = Config.SystemPrompt },
-		{ role = "user", content = userMessage },
-	}
-end
-
-local function getAIResponse(userMessage)
-	local apiKey = Config.ApiKey
-	if apiKey == nil or apiKey == "" then
-		return "Set ApiKey in ss-chatbot before using AI replies."
+local function sendChatOrDisplay(text)
+	local channel = getGeneralChannel()
+	if channel and channel.SendAsync then
+		local ok = pcall(function()
+			channel:SendAsync(text)
+		end)
+		if ok then
+			return
+		end
 	end
 
-	local requestBody = HttpService:JSONEncode({
+	displayMessage(text)
+end
+
+local function clampChat(text)
+	text = tostring(text or "")
+	text = text:gsub("%s+", " ")
+	if #text > 180 then
+		text = text:sub(1, 177) .. "..."
+	end
+	return text
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "SSChatbotGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.DisplayOrder = 9999
+ScreenGui.Parent = PlayerGui
+
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.fromOffset(420, 286)
+Main.Position = UDim2.fromOffset(32, 96)
+Main.BackgroundColor3 = Color3.fromRGB(18, 23, 28)
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.Parent = ScreenGui
+
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0, 8)
+Corner.Parent = Main
+
+local Stroke = Instance.new("UIStroke")
+Stroke.Color = Color3.fromRGB(80, 96, 110)
+Stroke.Thickness = 1
+Stroke.Transparency = 0.25
+Stroke.Parent = Main
+
+local Title = Instance.new("TextLabel")
+Title.BackgroundTransparency = 1
+Title.Position = UDim2.fromOffset(14, 10)
+Title.Size = UDim2.new(1, -96, 0, 24)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 18
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.TextColor3 = Color3.fromRGB(242, 247, 250)
+Title.Text = "SS Chatbot"
+Title.Parent = Main
+
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Size = UDim2.fromOffset(72, 26)
+ToggleButton.Position = UDim2.new(1, -86, 0, 9)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(55, 135, 92)
+ToggleButton.BorderSizePixel = 0
+ToggleButton.Font = Enum.Font.GothamBold
+ToggleButton.TextSize = 12
+ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleButton.Text = "ON"
+ToggleButton.Parent = Main
+
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(0, 6)
+ToggleCorner.Parent = ToggleButton
+
+local function makeLabel(text, y)
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Position = UDim2.fromOffset(14, y)
+	label.Size = UDim2.new(1, -28, 0, 18)
+	label.Font = Enum.Font.GothamSemibold
+	label.TextSize = 12
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextColor3 = Color3.fromRGB(165, 178, 188)
+	label.Text = text
+	label.Parent = Main
+	return label
+end
+
+local function makeBox(y, placeholder, text)
+	local box = Instance.new("TextBox")
+	box.Position = UDim2.fromOffset(14, y)
+	box.Size = UDim2.new(1, -28, 0, 30)
+	box.BackgroundColor3 = Color3.fromRGB(29, 37, 44)
+	box.BorderSizePixel = 0
+	box.ClearTextOnFocus = false
+	box.Font = Enum.Font.Code
+	box.TextSize = 13
+	box.TextXAlignment = Enum.TextXAlignment.Left
+	box.TextColor3 = Color3.fromRGB(242, 247, 250)
+	box.PlaceholderColor3 = Color3.fromRGB(118, 132, 144)
+	box.PlaceholderText = placeholder
+	box.Text = text or ""
+	box.Parent = Main
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingLeft = UDim.new(0, 8)
+	padding.PaddingRight = UDim.new(0, 8)
+	padding.Parent = box
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = box
+
+	return box
+end
+
+makeLabel("OpenRouter API key", 45)
+local ApiBox = makeBox(64, "sk-or-v1-...", "")
+ApiBox.FocusLost:Connect(function()
+	Config.ApiKey = ApiBox.Text
+end)
+
+makeLabel("Test prompt", 102)
+local PromptBox = makeBox(121, "Ask the bot something", "hello")
+
+local AskButton = Instance.new("TextButton")
+AskButton.Position = UDim2.fromOffset(14, 162)
+AskButton.Size = UDim2.fromOffset(118, 32)
+AskButton.BackgroundColor3 = Color3.fromRGB(71, 133, 188)
+AskButton.BorderSizePixel = 0
+AskButton.Font = Enum.Font.GothamBold
+AskButton.TextSize = 13
+AskButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+AskButton.Text = "Ask Bot"
+AskButton.Parent = Main
+
+local AskCorner = Instance.new("UICorner")
+AskCorner.CornerRadius = UDim.new(0, 6)
+AskCorner.Parent = AskButton
+
+local Status = Instance.new("TextLabel")
+Status.BackgroundTransparency = 1
+Status.Position = UDim2.fromOffset(146, 162)
+Status.Size = UDim2.new(1, -160, 0, 32)
+Status.Font = Enum.Font.Gotham
+Status.TextSize = 12
+Status.TextWrapped = true
+Status.TextXAlignment = Enum.TextXAlignment.Left
+Status.TextColor3 = Color3.fromRGB(174, 188, 198)
+Status.Text = "Loaded. Add an API key, then press Ask Bot or chat !ai hello."
+Status.Parent = Main
+
+local Output = Instance.new("TextLabel")
+Output.BackgroundColor3 = Color3.fromRGB(24, 31, 38)
+Output.BorderSizePixel = 0
+Output.Position = UDim2.fromOffset(14, 205)
+Output.Size = UDim2.new(1, -28, 0, 66)
+Output.Font = Enum.Font.Gotham
+Output.TextSize = 13
+Output.TextWrapped = true
+Output.TextXAlignment = Enum.TextXAlignment.Left
+Output.TextYAlignment = Enum.TextYAlignment.Top
+Output.TextColor3 = Color3.fromRGB(232, 240, 244)
+Output.Text = "Bot output will appear here."
+Output.Parent = Main
+
+local OutputPadding = Instance.new("UIPadding")
+OutputPadding.PaddingTop = UDim.new(0, 8)
+OutputPadding.PaddingLeft = UDim.new(0, 8)
+OutputPadding.PaddingRight = UDim.new(0, 8)
+OutputPadding.Parent = Output
+
+local OutputCorner = Instance.new("UICorner")
+OutputCorner.CornerRadius = UDim.new(0, 6)
+OutputCorner.Parent = Output
+
+local function setStatus(text)
+	Status.Text = text
+	print("[SS Chatbot] " .. text)
+end
+
+local function getAIResponse(prompt)
+	if Config.ApiKey == nil or Config.ApiKey == "" then
+		return nil, "Put your OpenRouter API key in the box first."
+	end
+
+	local body = HttpService:JSONEncode({
 		model = Config.Model,
-		messages = buildMessages(userMessage),
+		messages = {
+			{ role = "system", content = Config.SystemPrompt },
+			{ role = "user", content = prompt },
+		},
 		temperature = 0.7,
-		max_tokens = 120,
+		max_tokens = Config.MaxTokens,
 	})
 
-	local ok, body, statusCode = httpRequest(
+	local ok, response, statusCode = executorRequest(
 		"https://openrouter.ai/api/v1/chat/completions",
 		"POST",
 		{
-			["Authorization"] = "Bearer " .. apiKey,
+			["Authorization"] = "Bearer " .. Config.ApiKey,
 			["Content-Type"] = "application/json",
+			["HTTP-Referer"] = "https://github.com/Essencor/roblox-ai-modules",
+			["X-Title"] = "SS Chatbot",
 		},
-		requestBody
+		body
 	)
 
 	if not ok then
-		return nil, "HTTP request failed: " .. tostring(body) .. " (" .. tostring(statusCode) .. ")"
+		return nil, "Request failed: " .. tostring(response) .. " (" .. tostring(statusCode) .. ")"
 	end
 
 	local decodedOk, decoded = pcall(function()
-		return HttpService:JSONDecode(body)
+		return HttpService:JSONDecode(response)
 	end)
 
 	if not decodedOk then
-		return nil, "Could not decode API response."
+		return nil, "OpenRouter returned invalid JSON."
 	end
 
-	local choice = decoded and decoded.choices and decoded.choices[1]
-	local message = choice and choice.message and choice.message.content
+	local message = decoded and decoded.choices and decoded.choices[1] and decoded.choices[1].message and decoded.choices[1].message.content
 	if type(message) ~= "string" or message == "" then
-		return nil, "API returned an empty response."
+		local errorText = decoded and decoded.error and decoded.error.message
+		return nil, errorText or "OpenRouter returned no message."
 	end
 
-	return message
+	return clampChat(message)
 end
 
-local function shouldRespond(message)
-	local lower = string.lower(message or "")
-	if string.sub(lower, 1, #Config.Prefix) == Config.Prefix then
-		return true
-	end
-	return string.find(lower, string.lower(Config.BotName), 1, true) ~= nil
-end
-
-local function normalizePrompt(message)
-	if string.sub(message, 1, #Config.Prefix) == Config.Prefix then
-		return string.sub(message, #Config.Prefix + 1)
-	end
-	return message
-end
-
-local function replyToMessage(player, message)
-	if not Config.Enabled then
+local function askBot(prompt, speakerName, sendToChat)
+	if pendingRequest then
+		setStatus("Already thinking. Wait for this reply first.")
 		return
 	end
 
-	if pendingRequest then
+	if not Config.Enabled then
+		setStatus("Bot is turned off.")
 		return
 	end
 
 	local now = os.clock()
-	if now - lastReplyAt < Config.MinDelay then
+	if now - lastReplyAt < Config.Cooldown then
+		setStatus("Cooldown active. Try again in a moment.")
 		return
 	end
 
-	if recentUserReply[player.Name] and now - recentUserReply[player.Name] < Config.MinDelay then
-		return
-	end
-
-	if not shouldRespond(message) then
+	prompt = tostring(prompt or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if prompt == "" then
+		setStatus("Type something for the bot first.")
 		return
 	end
 
 	pendingRequest = true
-	recentUserReply[player.Name] = now
 	lastReplyAt = now
+	setStatus("Thinking...")	
+	Output.Text = "Thinking about: " .. prompt
 
-	local prompt = normalizePrompt(message)
-	local response, err = getAIResponse(prompt)
+	task.spawn(function()
+		local answer, err = getAIResponse(prompt)
+		pendingRequest = false
 
-	if response then
-		sendSystemMessage(string.format("[%s] %s", Config.BotName, response))
-	else
-		sendSystemMessage(string.format("[%s] %s", Config.BotName, err or "No response available."))
-	end
+		if not answer then
+			Output.Text = err or "No response."
+			setStatus("Could not get a reply.")
+			displayMessage("[SS Chatbot] " .. (err or "No response."))
+			return
+		end
 
-	pendingRequest = false
+		local prefix = Config.BotName
+		if speakerName and speakerName ~= "" then
+			prefix = prefix .. " to " .. speakerName
+		end
+
+		local line = "[" .. prefix .. "] " .. answer
+		Output.Text = line
+		setStatus("Replied.")
+
+		if sendToChat then
+			sendChatOrDisplay(line)
+		else
+			displayMessage(line)
+		end
+	end)
 end
 
-local function connectPlayer(player)
-	if player == LocalPlayer then
+AskButton.MouseButton1Click:Connect(function()
+	Config.ApiKey = ApiBox.Text
+	askBot(PromptBox.Text, LocalPlayer.DisplayName, false)
+end)
+
+ToggleButton.MouseButton1Click:Connect(function()
+	Config.Enabled = not Config.Enabled
+	ToggleButton.Text = Config.Enabled and "ON" or "OFF"
+	ToggleButton.BackgroundColor3 = Config.Enabled and Color3.fromRGB(55, 135, 92) or Color3.fromRGB(148, 68, 68)
+	setStatus(Config.Enabled and "Bot enabled." or "Bot disabled.")
+end)
+
+local dragging = false
+local dragStart = nil
+local startPos = nil
+
+Main.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = Main.Position
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not dragging then
 		return
 	end
 
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+
+	local delta = input.Position - dragStart
+	Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end)
+
+local function shouldAnswer(message)
+	message = tostring(message or "")
+	local lower = string.lower(message)
+	local prefix = string.lower(Config.Prefix)
+
+	if string.sub(lower, 1, #prefix) == prefix then
+		return true, message:sub(#Config.Prefix + 1)
+	end
+
+	local botName = string.lower(Config.BotName)
+	if string.find(lower, botName, 1, true) then
+		return true, message
+	end
+
+	return false, nil
+end
+
+local function handleChatMessage(player, message)
+	if not player or player == LocalPlayer then
+		return
+	end
+
+	local key = tostring(player.UserId) .. ":" .. tostring(message)
+	if seenMessages[key] and os.clock() - seenMessages[key] < 3 then
+		return
+	end
+	seenMessages[key] = os.clock()
+
+	local ok, prompt = shouldAnswer(message)
+	if ok then
+		Config.ApiKey = ApiBox.Text
+		askBot(prompt, player.DisplayName or player.Name, true)
+	end
+end
+
+local function connectPlayer(player)
 	player.Chatted:Connect(function(message)
-		replyToMessage(player, message)
+		handleChatMessage(player, message)
 	end)
 end
 
@@ -271,14 +471,19 @@ end
 
 Players.PlayerAdded:Connect(connectPlayer)
 
-if Rayfield then
-	pcall(function()
-		Rayfield:Notify({
-			Title = "SS Chatbot Loaded",
-			Content = "Rayfield is available, but the chatbot will still run safely without it.",
-			Duration = 4,
-		})
-	end)
-end
+pcall(function()
+	TextChatService.MessageReceived:Connect(function(textChatMessage)
+		local source = textChatMessage.TextSource
+		if not source then
+			return
+		end
 
-setStatus("Loaded successfully. Configure ApiKey and Model before enabling AI replies.")
+		local player = Players:GetPlayerByUserId(source.UserId)
+		if player then
+			handleChatMessage(player, textChatMessage.Text)
+		end
+	end)
+end)
+
+setStatus("Loaded. Add an API key, then press Ask Bot or chat " .. Config.Prefix .. " hello.")
+displayMessage("[SS Chatbot] Loaded. Use " .. Config.Prefix .. " hello or press Ask Bot in the panel.")
