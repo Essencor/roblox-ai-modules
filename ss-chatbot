@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
-print("[SS Chatbot] loader v19 started")
+print("[SS Chatbot] loader v20 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = table.concat({
@@ -120,7 +120,7 @@ if not autoGreetEnv.SSChatbotAutoGreetLoopActive then
 end
 ]==]
 
-source = source:gsub('local function AutoGreetLoop%(%)%s*.-spawn%(AutoGreetLoop%)', quietAutoGreetLoop, 1)
+source = source:gsub('local function AutoGreetLoop%(%)%s*.-spawn%(AutoGreetLoop%)', function() return quietAutoGreetLoop end, 1)
 source = source:gsub('Content = "Testing all 3 free models%.%.%.",', 'Content = "Testing all 3 free models with pauses...",', 1)
 source = source:gsub('wait%(2%) %-%- Longer delay between tests', 'wait(8) -- Give free upstream providers room between tests', 1)
 
