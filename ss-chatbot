@@ -4,23 +4,7 @@
 print("[SS Chatbot] loader v33 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
-local DEFAULT_OPENROUTER_KEY = table.concat({
-   "sk-or-v1-fb43347952a4ca51",
-   "e587a591bd1a8bb6e8af00aa",
-   "123037573a602e4b9a61790c"
-})
-
-local MODEL_REPLACEMENTS = {
-   ["tngtech/deepseek-r1t2-chimera:free"] = "google/gemma-4-31b-it:free",
-   ["mistralai/devstral-2512:free"] = "nousresearch/hermes-3-llama-3.1-405b:free",
-   ["xiaomi/mimo-v2-flash:free"] = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
-}
-
-local BUILT_IN_KEY_REPLACEMENTS = {
-   "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",
-   "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",
-   "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"
-}
+local DEFAULT_OPENROUTER_KEY = "sk-or-v1-" .. "3ca85b5c5b42343dad6573c1584e4b03451460bbdb406278a9eba474a43845a2"
 
 local function escapePattern(text)
    return (text:gsub("([^%w])", "%%%1"))
@@ -40,13 +24,13 @@ end
 
 source = source:gsub('ApiKey = "",', 'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",', 1)
 
-for oldModel, newModel in pairs(MODEL_REPLACEMENTS) do
-   source = source:gsub(escapePattern(oldModel), newModel)
-end
+source = source:gsub(escapePattern("tngtech/deepseek-r1t2-chimera:free"), "google/gemma-4-31b-it:free")
+source = source:gsub(escapePattern("mistralai/devstral-2512:free"), "nousresearch/hermes-3-llama-3.1-405b:free")
+source = source:gsub(escapePattern("xiaomi/mimo-v2-flash:free"), "cognitivecomputations/dolphin-mistral-24b-venice-edition:free")
 
-for _, oldKey in ipairs(BUILT_IN_KEY_REPLACEMENTS) do
-   source = source:gsub(escapePattern(oldKey), DEFAULT_OPENROUTER_KEY)
-end
+source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
+source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
+source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 
 source = source:gsub(
    'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
@@ -69,23 +53,25 @@ source = source:gsub(
       source = source:gsub(
          'local Elements = Main%.Elements',
          [[pcall(function()
-      if Main and not Main:FindFirstChild("Shadow") then
-         local Shadow = Instance.new("Frame")
-         Shadow.Name = "Shadow"
-         Shadow.BackgroundTransparency = 1
-         Shadow.Size = UDim2.new(1, 36, 1, 36)
-         Shadow.Position = UDim2.new(0, -18, 0, -18)
-         Shadow.ZIndex = Main.ZIndex - 1
-         Shadow.Parent = Main
-         local Image = Instance.new("ImageLabel")
-         Image.Name = "Image"
-         Image.BackgroundTransparency = 1
-         Image.Size = UDim2.new(1, 0, 1, 0)
-         Image.ImageTransparency = 1
-         Image.ScaleType = Enum.ScaleType.Slice
-         Image.SliceCenter = Rect.new(49, 49, 450, 450)
-         Image.Parent = Shadow
-      end
+      pcall(function()
+         if not Main:FindFirstChild("Shadow") then
+            local Shadow = Instance.new("Frame")
+            Shadow.Name = "Shadow"
+            Shadow.BackgroundTransparency = 1
+            Shadow.Size = UDim2.new(1, 36, 1, 36)
+            Shadow.Position = UDim2.new(0, -18, 0, -18)
+            Shadow.ZIndex = Main.ZIndex - 1
+            Shadow.Parent = Main
+            local Image = Instance.new("ImageLabel")
+            Image.Name = "Image"
+            Image.BackgroundTransparency = 1
+            Image.Size = UDim2.new(1, 0, 1, 0)
+            Image.ImageTransparency = 1
+            Image.ScaleType = Enum.ScaleType.Slice
+            Image.SliceCenter = Rect.new(49, 49, 450, 450)
+            Image.Parent = Shadow
+         end
+      end)
    end)
    local Elements = Main.Elements]],
          1
@@ -95,35 +81,25 @@ source = source:gsub(
          "local Passthrough = false%s*\n%s*Topbar%.Title%.Text = Settings%.Name",
          function()
             return [[local Passthrough = false
-   pcall(function()
-      if Topbar and not Topbar:FindFirstChild("Title") then
-         local Title = Instance.new("TextLabel")
-         Title.Name = "Title"
-         Title.AnchorPoint = Vector2.new(0, 0.5)
-         Title.Position = UDim2.new(0, 15, 0.5, 0)
-         Title.Size = UDim2.new(1, -150, 1, 0)
-         Title.BackgroundTransparency = 1
-         Title.TextColor3 = Color3.fromRGB(240, 240, 240)
-         Title.TextTransparency = 1
-         Title.TextSize = 16
-         Title.Font = Enum.Font.GothamMedium
-         Title.TextXAlignment = Enum.TextXAlignment.Left
-         Title.Parent = Topbar
-      end
-   end)
-   if Topbar and Topbar:FindFirstChild("Title") then
-      Topbar.Title.Text = Settings.Name
-   end]]
+   if not Topbar:FindFirstChild("Title") then
+      local Title = Instance.new("TextLabel")
+      Title.Name = "Title"
+      Title.AnchorPoint = Vector2.new(0, 0.5)
+      Title.Position = UDim2.new(0, 15, 0.5, 0)
+      Title.Size = UDim2.new(1, -150, 1, 0)
+      Title.BackgroundTransparency = 1
+      Title.TextColor3 = Color3.fromRGB(240, 240, 240)
+      Title.TextTransparency = 1
+      Title.TextSize = 16
+      Title.Font = Enum.Font.GothamMedium
+      Title.TextXAlignment = Enum.TextXAlignment.Left
+      Title.Parent = Topbar
+   end
+   Topbar.Title.Text = Settings.Name]]
          end,
          1
       )
 
-      source = source:gsub(
-         '([^\n]-)Main%.Shadow([^\n]*)\n',
-         function(pre, post)
-            return 'if Main and Main:FindFirstChild("Shadow") then\n' .. pre .. 'Main.Shadow' .. post .. '\nend\n'
-         end
-      )
    end
 
    local chunk, compileErr = loadstring(source)]==]
@@ -199,7 +175,7 @@ source, removedExact = source:gsub(duplicateTabBlock, "-- Tabs are created below
 
 if removedExact == 0 then
    source = source:gsub(
-      "%-%- Create Tabs%s*\nlocal ChatTab = Window:CreateTab%(\"Chatbot\", 4483362458%)%s*\nlocal APITab = Window:CreateTab%(\"API Setup\", 4483362458%)%s*\nlocal PromptsTab = Window:CreateTab%([...]",
+      "%-%- Create Tabs%s*\nlocal ChatTab = Window:CreateTab%(\"Chatbot\", 4483362458%)%s*\nlocal APITab = Window:CreateTab%(\"API Setup\", 4483362458%)%s*\nlocal PromptsTab = Window:CreateTab%(\"Prompts\", 4483362458%)%s*\nlocal DebugTab = Window:CreateTab%(\"Debug\", 4483362458%)%s*\nlocal ModulesTab = Window:CreateTab%(\"Modules\", 4483362458%)%s*\nlocal MemoryTab = Window:CreateTab%(\"Memory\", 4483362458%)%s*\nlocal SettingsTab = Window:CreateTab%(\"Settings\", 4483362458%)",
       "-- Tabs are created below, next to their actual UI content.",
       1
    )
@@ -214,7 +190,7 @@ source = source:gsub(
 source = source:gsub(
    "local GlobalMemorySlider = MemoryTab:CreateSlider%(%{(.-)\n%}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS & INFO",
    function(sliderBody)
-      return "local GlobalMemorySlider = MemoryTab:CreateSlider({" .. sliderBody .. "\n})\n\n-- Initialize memory stats display while the memory UI locals are still in scope.\nUpdateMemoryStats()\nend[...]"
+      return "local GlobalMemorySlider = MemoryTab:CreateSlider({" .. sliderBody .. "\n})\n\n-- Initialize memory stats display while the memory UI locals are still in scope.\nUpdateMemoryStats()\nend\n\n-- ========================================\n-- TAB 7: SETTINGS & INFO"
    end,
    1
 )
