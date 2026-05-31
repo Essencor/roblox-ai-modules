@@ -1,30 +1,61 @@
--- SS Chatbot public loader
--- Loads the fixed original hub script from a pinned commit and reports real compile/runtime errors.
+print("[SS Chatbot] entrypoint v8 started")
 
-local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
-print("[SS Chatbot] Fetching source...")
+local Window = Rayfield:CreateWindow({
+   Name = "SS Hub - AI Chatbot",
+   LoadingTitle = "AI Chatbot",
+   LoadingSubtitle = "loading original hub...",
+   ConfigurationSaving = {
+      Enabled = false
+   },
+   Discord = {
+      Enabled = false
+   },
+   KeySystem = false
+})
 
-local okFetch, source = pcall(function()
-   return game:HttpGet(SOURCE_URL, true)
-end)
+local Tab = Window:CreateTab("Loader", 4483362458)
+Tab:CreateParagraph({
+   Title = "SS Chatbot Loader",
+   Content = "The GitHub entrypoint loaded correctly. If you see this, the outer loadstring is working."
+})
 
-if not okFetch then
-   error("[SS Chatbot] HttpGet failed: " .. tostring(source))
-end
+Tab:CreateButton({
+   Name = "Load Original Hub",
+   Callback = function()
+      print("[SS Chatbot] fetching original hub")
+      local source = game:HttpGet("https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot", true)
+      local chunk, compileErr = loadstring(source)
 
-if type(source) ~= "string" or source == "" then
-   error("[SS Chatbot] Empty source from GitHub")
-end
+      if not chunk then
+         Rayfield:Notify({
+            Title = "Compile Error",
+            Content = tostring(compileErr),
+            Duration = 8,
+            Image = 4483362458
+         })
+         error("[SS Chatbot] original hub compile failed: " .. tostring(compileErr))
+      end
 
-local chunk, compileErr = loadstring(source)
-if not chunk then
-   error("[SS Chatbot] Source compile failed: " .. tostring(compileErr))
-end
+      local ok, runtimeErr = pcall(chunk)
+      if not ok then
+         Rayfield:Notify({
+            Title = "Runtime Error",
+            Content = tostring(runtimeErr),
+            Duration = 8,
+            Image = 4483362458
+         })
+         error("[SS Chatbot] original hub runtime failed: " .. tostring(runtimeErr))
+      end
+   end
+})
 
-print("[SS Chatbot] Source compiled. Starting hub...")
+Rayfield:Notify({
+   Title = "SS Chatbot Loaded",
+   Content = "Entrypoint v8 loaded. Press Load Original Hub.",
+   Duration = 5,
+   Image = 4483362458
+})
 
-local okRun, runtimeErr = pcall(chunk)
-if not okRun then
-   error("[SS Chatbot] Source runtime failed: " .. tostring(runtimeErr))
-end
+print("[SS Chatbot] entrypoint v8 ready")
