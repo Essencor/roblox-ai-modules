@@ -1,7 +1,7 @@
--- SS Chatbot public loader v36
--- Loads the restored original hub, applies runtime fixes, then runs it.
+-- SS Chatbot public loader v37
+-- Client-side loader for the restored original hub.
 
-print("[SS Chatbot] loader v36 started")
+print("[SS Chatbot] loader v37 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = "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"
@@ -10,7 +10,6 @@ local function escapePattern(text)
 	return (text:gsub("([^%w])", "%%%1"))
 end
 
--- ── Fetch hub source ────────────────────────────────────────────────────────
 local okFetch, source = pcall(function()
 	return game:HttpGet(SOURCE_URL, true)
 end)
@@ -23,148 +22,146 @@ if type(source) ~= "string" or source == "" then
 	error("[SS Chatbot] Empty source from GitHub")
 end
 
--- ── API key: inject default and replace all hardcoded keys ─────────────────
-source = source:gsub('ApiKey = "",', 'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",', 1)
+-- Patch the fetched Rayfield client source before the original hub compiles it.
+-- Rayfield returns a library table, so ScreenGui children must be repaired inside
+-- Rayfield's own source after the asset is fetched and before CreateWindow runs.
+source = source:gsub(
+	'local function loadRemoteChunk%(url, label%)%s*\n%s*local source = game:HttpGet%(url, true%)',
+	function()
+		return [[local function loadRemoteChunk(url, label)
+   local source = game:HttpGet(url, true)
 
+   if label == "Rayfield" and type(source) == "string" then
+      local rayfieldAssetRepair = [===[
+local function SSChatbotEnsureRayfieldAssetChildren(Rayfield)
+   if not Rayfield then return end
+   local Main = Rayfield:FindFirstChild("Main")
+   if not Main then return end
+
+   local Topbar = Main:FindFirstChild("Topbar")
+   if not Topbar then
+      Topbar = Instance.new("Frame")
+      Topbar.Name = "Topbar"
+      Topbar.Size = UDim2.new(1, 0, 0, 45)
+      Topbar.BackgroundColor3 = Color3.fromRGB(34, 34, 34)
+      Topbar.BorderSizePixel = 0
+      Topbar.Parent = Main
+   end
+
+   if not Main:FindFirstChild("Shadow") then
+      local Shadow = Instance.new("Frame")
+      Shadow.Name = "Shadow"
+      Shadow.BackgroundTransparency = 1
+      Shadow.Size = UDim2.new(1, 36, 1, 36)
+      Shadow.Position = UDim2.new(0, -18, 0, -18)
+      Shadow.ZIndex = Main.ZIndex - 1
+      Shadow.Parent = Main
+
+      local Img = Instance.new("ImageLabel")
+      Img.Name = "Image"
+      Img.BackgroundTransparency = 1
+      Img.Size = UDim2.new(1, 0, 1, 0)
+      Img.ImageTransparency = 1
+      Img.ScaleType = Enum.ScaleType.Slice
+      Img.SliceCenter = Rect.new(49, 49, 450, 450)
+      Img.Parent = Shadow
+   elseif not Main.Shadow:FindFirstChild("Image") then
+      local Img = Instance.new("ImageLabel")
+      Img.Name = "Image"
+      Img.BackgroundTransparency = 1
+      Img.Size = UDim2.new(1, 0, 1, 0)
+      Img.ImageTransparency = 1
+      Img.ScaleType = Enum.ScaleType.Slice
+      Img.SliceCenter = Rect.new(49, 49, 450, 450)
+      Img.Parent = Main.Shadow
+   end
+
+   if not Topbar:FindFirstChild("Title") then
+      local Title = Instance.new("TextLabel")
+      Title.Name = "Title"
+      Title.AnchorPoint = Vector2.new(0, 0.5)
+      Title.Position = UDim2.new(0, 15, 0.5, 0)
+      Title.Size = UDim2.new(1, -150, 1, 0)
+      Title.BackgroundTransparency = 1
+      Title.TextColor3 = Color3.fromRGB(240, 240, 240)
+      Title.TextTransparency = 1
+      Title.TextSize = 16
+      Title.Font = Enum.Font.GothamMedium
+      Title.TextXAlignment = Enum.TextXAlignment.Left
+      Title.Text = ""
+      Title.Parent = Topbar
+   end
+
+   if not Topbar:FindFirstChild("CornerRepair") then
+      local CR = Instance.new("Frame")
+      CR.Name = "CornerRepair"
+      CR.Size = UDim2.new(1, 0, 0, 10)
+      CR.Position = UDim2.new(0, 0, 1, -5)
+      CR.BackgroundColor3 = Topbar.BackgroundColor3
+      CR.BorderSizePixel = 0
+      CR.ZIndex = Topbar.ZIndex
+      CR.Parent = Topbar
+   end
+
+   if not Topbar:FindFirstChild("Divider") then
+      local Div = Instance.new("Frame")
+      Div.Name = "Divider"
+      Div.Size = UDim2.new(1, 0, 0, 1)
+      Div.Position = UDim2.new(0, 0, 1, -1)
+      Div.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+      Div.BorderSizePixel = 0
+      Div.Parent = Topbar
+   end
+
+   if not Topbar:FindFirstChildOfClass("UIStroke") then
+      local Stroke = Instance.new("UIStroke")
+      Stroke.Thickness = 1.5
+      Stroke.Parent = Topbar
+   end
+end
+
+SSChatbotEnsureRayfieldAssetChildren(Rayfield)
+]===]
+
+      source = source:gsub("Rayfield%.Enabled = false", rayfieldAssetRepair .. "\nRayfield.Enabled = false", 1)
+   end]]
+	end,
+	1
+)
+
+-- API key: inject default and replace all hardcoded keys.
+source = source:gsub('ApiKey = "",', 'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",', 1)
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 
--- ── Model replacements ───────────────────────────────────────────────────────
-source = source:gsub(escapePattern("tngtech/deepseek-r1t2-chimera:free"),  "google/gemma-4-31b-it:free")
-source = source:gsub(escapePattern("mistralai/devstral-2512:free"),         "nousresearch/hermes-3-llama-3.1-405b:free")
-source = source:gsub(escapePattern("xiaomi/mimo-v2-flash:free"),            "cognitivecomputations/dolphin-mistral-24b-venice-edition:free")
+-- Model replacements.
+source = source:gsub(escapePattern("tngtech/deepseek-r1t2-chimera:free"), "google/gemma-4-31b-it:free")
+source = source:gsub(escapePattern("mistralai/devstral-2512:free"), "nousresearch/hermes-3-llama-3.1-405b:free")
+source = source:gsub(escapePattern("xiaomi/mimo-v2-flash:free"), "cognitivecomputations/dolphin-mistral-24b-venice-edition:free")
 
--- ── API key selection: prefer user-set key over model-specific key ──────────
+-- Prefer user-set key over model-specific key.
 source = source:gsub(
 	'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
 	'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]',
 	1
 )
 
--- ── OpenRouter provider hint for free-tier throughput ───────────────────────
+-- OpenRouter provider hint for free-tier throughput.
 source = source:gsub(
 	'max_tokens = 80  %-%- Reduced to ensure shorter responses',
 	'max_tokens = 80,  -- Reduced to ensure shorter responses\n      provider = {\n         allow_fallbacks = true,\n         sort = "throughput"\n      }',
 	1
 )
 
--- ── Rayfield asset repair ─────────────────────────────────────────────────────
--- When game:GetObjects() loads the Rayfield ScreenGui, some executors return
--- it without all child instances (Shadow, Topbar.Title, etc.) that Rayfield's
--- source code assumes exist. We patch the hub to repair the asset immediately
--- after loadRemoteChunk returns it, before Rayfield's own code touches anything.
---
--- Children that Rayfield directly accesses and that may be missing:
---   Rayfield.Main.Shadow              (Frame)
---   Rayfield.Main.Shadow.Image        (ImageLabel)
---   Rayfield.Main.Topbar.Title        (TextLabel)
---   Rayfield.Main.Topbar.CornerRepair (Frame) -- used in ChangeTheme
---   Rayfield.Main.Topbar.Divider      (Frame) -- used in Hide/Minimise
-
-source = source:gsub(
-	'local Rayfield\nlocal success, err = pcall%(function%(%)%s*\n%s*Rayfield = loadRemoteChunk%("https://sirius%.menu/rayfield", "Rayfield"%)\nend%)',
-	[[local Rayfield
-local success, err = pcall(function()
-	Rayfield = loadRemoteChunk("https://sirius.menu/rayfield", "Rayfield")
-end)
-
--- Repair missing asset children so Rayfield doesn't crash on executors
--- that return incomplete ScreenGui instances from game:GetObjects().
-pcall(function()
-	if not Rayfield then return end
-	local Main = Rayfield:FindFirstChild("Main")
-	if not Main then return end
-	local Topbar = Main:FindFirstChild("Topbar")
-
-	-- Main.Shadow + Main.Shadow.Image
-	if not Main:FindFirstChild("Shadow") then
-		local Shadow = Instance.new("Frame")
-		Shadow.Name = "Shadow"
-		Shadow.BackgroundTransparency = 1
-		Shadow.Size = UDim2.new(1, 36, 1, 36)
-		Shadow.Position = UDim2.new(0, -18, 0, -18)
-		Shadow.ZIndex = Main.ZIndex - 1
-		Shadow.Parent = Main
-		local Img = Instance.new("ImageLabel")
-		Img.Name = "Image"
-		Img.BackgroundTransparency = 1
-		Img.Size = UDim2.new(1, 0, 1, 0)
-		Img.ImageTransparency = 1
-		Img.ScaleType = Enum.ScaleType.Slice
-		Img.SliceCenter = Rect.new(49, 49, 450, 450)
-		Img.Parent = Shadow
-	elseif not Main.Shadow:FindFirstChild("Image") then
-		local Img = Instance.new("ImageLabel")
-		Img.Name = "Image"
-		Img.BackgroundTransparency = 1
-		Img.Size = UDim2.new(1, 0, 1, 0)
-		Img.ImageTransparency = 1
-		Img.ScaleType = Enum.ScaleType.Slice
-		Img.SliceCenter = Rect.new(49, 49, 450, 450)
-		Img.Parent = Main.Shadow
-	end
-
-	if Topbar then
-		-- Topbar.Title
-		if not Topbar:FindFirstChild("Title") then
-			local Title = Instance.new("TextLabel")
-			Title.Name = "Title"
-			Title.AnchorPoint = Vector2.new(0, 0.5)
-			Title.Position = UDim2.new(0, 15, 0.5, 0)
-			Title.Size = UDim2.new(1, -150, 1, 0)
-			Title.BackgroundTransparency = 1
-			Title.TextColor3 = Color3.fromRGB(240, 240, 240)
-			Title.TextTransparency = 1
-			Title.TextSize = 16
-			Title.Font = Enum.Font.GothamMedium
-			Title.TextXAlignment = Enum.TextXAlignment.Left
-			Title.Text = ""
-			Title.Parent = Topbar
-		end
-
-		-- Topbar.CornerRepair
-		if not Topbar:FindFirstChild("CornerRepair") then
-			local CR = Instance.new("Frame")
-			CR.Name = "CornerRepair"
-			CR.Size = UDim2.new(1, 0, 0, 10)
-			CR.Position = UDim2.new(0, 0, 1, -5)
-			CR.BackgroundColor3 = Color3.fromRGB(34, 34, 34)
-			CR.BorderSizePixel = 0
-			CR.ZIndex = Topbar.ZIndex
-			CR.Parent = Topbar
-		end
-
-		-- Topbar.Divider
-		if not Topbar:FindFirstChild("Divider") then
-			local Div = Instance.new("Frame")
-			Div.Name = "Divider"
-			Div.Size = UDim2.new(1, 0, 0, 1)
-			Div.Position = UDim2.new(0, 0, 1, -1)
-			Div.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-			Div.BorderSizePixel = 0
-			Div.Parent = Topbar
-		end
-
-		-- Topbar.UIStroke
-		if not Topbar:FindFirstChildOfClass("UIStroke") then
-			local S = Instance.new("UIStroke")
-			S.Thickness = 1.5
-			S.Parent = Topbar
-		end
-	end
-end)]],
-	1
-)
-
--- ── After Rayfield loads, clean up any stale instance ──────────────────────
+-- Keep Rayfield alive after it reports successful load; CreateWindow uses it next.
 source = source:gsub(
 	'print%("%[AI Chatbot%] Rayfield UI loaded successfully!"%)',
-	'print("[AI Chatbot] Rayfield UI loaded successfully!")\npcall(function()\n\tif Rayfield and Rayfield.Destroy then\n\t\tRayfield:Destroy()\n\tend\nend)',
+	'print("[AI Chatbot] Rayfield UI loaded successfully!")',
 	1
 )
 
--- ── AutoGreet loop: prevent duplicate loop ───────────────────────────────────
+-- AutoGreet loop: prevent duplicate loop.
 local quietAutoGreetLoop = [==[
 local function AutoGreetLoop()
 	while true do
@@ -213,11 +210,11 @@ source = source:gsub(
 	1
 )
 
--- ── Model test delays ────────────────────────────────────────────────────────
-source = source:gsub('Content = "Testing all 3 free models%.%.%.",',  'Content = "Testing all 3 free models with pauses...",')
-source = source:gsub('wait%(2%) %-%- Longer delay between tests',      'wait(8) -- Give free upstream providers room between tests')
+-- Model test delays.
+source = source:gsub('Content = "Testing all 3 free models%.%.%.",', 'Content = "Testing all 3 free models with pauses...",')
+source = source:gsub('wait%(2%) %-%- Longer delay between tests', 'wait(8) -- Give free upstream providers room between tests')
 
--- ── Remove duplicate tab declarations ───────────────────────────────────────
+-- Remove duplicate tab declarations.
 local duplicateTabBlock = [==[
 -- Create Tabs
 local ChatTab = Window:CreateTab("Chatbot", 4483362458)
@@ -247,7 +244,7 @@ if removedExact == 0 then
 	)
 end
 
--- ── Memory tab: wrap UI locals in do-block ───────────────────────────────────
+-- Memory tab: wrap UI locals in do-block.
 source = source:gsub(
 	'MemoryTab = Window:CreateTab%("Memory", 4483362458%)%s*\n%s*local MemorySection = MemoryTab:CreateSection%("Memory Statistics"%)',
 	'MemoryTab = Window:CreateTab("Memory", 4483362458)\n\ndo\nlocal MemorySection = MemoryTab:CreateSection("Memory Statistics")',
@@ -266,7 +263,7 @@ source = source:gsub(
 	1
 )
 
--- ── Settings tab: same do-block treatment ──────────────────────────────────
+-- Settings tab: same do-block treatment.
 source = source:gsub(
 	'SettingsTab = Window:CreateTab%("Settings", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%("Information"%)',
 	'SettingsTab = Window:CreateTab("Settings", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection("Information")',
@@ -279,7 +276,6 @@ source = source:gsub(
 	1
 )
 
--- ── Compile & run ────────────────────────────────────────────────────────────
 local chunk, compileErr = loadstring(source)
 if not chunk then
 	error("[SS Chatbot] compile failed: " .. tostring(compileErr))
