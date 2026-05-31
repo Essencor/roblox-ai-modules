@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies Luau compile fixes, then runs it.
 
-print("[SS Chatbot] loader v10 started")
+print("[SS Chatbot] loader v11 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 
@@ -16,6 +16,13 @@ end
 if type(source) ~= "string" or source == "" then
    error("[SS Chatbot] Empty source from GitHub")
 end
+
+-- The original script creates an empty set of tabs first, then creates the real
+-- tabs again where the UI content is added. Remove the empty first set.
+source = source:gsub(
+   "%-%- Create Tabs%s*\nlocal ChatTab = Window:CreateTab%(\"Chatbot\", 4483362458%)%s*\nlocal APITab = Window:CreateTab%(\"API Setup\", 4483362458%)%s*\nlocal PromptsTab = Window:CreateTab%(\"Prompts\", 4483362458%)%s*\nlocal DebugTab = Window:CreateTab%(\"Debug\", 4483362458%)%s*\nlocal ModulesTab = Window:CreateTab%(\"Modules\", 4483362458%)%s*\nlocal MemoryTab = Window:CreateTab%(\"Memory\", 4483362458%)%s*\nlocal SettingsTab = Window:CreateTab%(\"Settings\", 4483362458%)",
+   "-- Tabs are created below, next to their actual UI content."
+)
 
 -- The original script has hundreds of top-level UI locals. Roblox/Luau can hit
 -- the 200 local-register compile limit near the final Settings labels, so scope
