@@ -1,7 +1,7 @@
 -- SS Chatbot public loader
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
-print("[SS Chatbot] loader v24 started")
+print("[SS Chatbot] loader v25 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = table.concat({
@@ -57,6 +57,41 @@ source = source:gsub(
 source = source:gsub(
    'max_tokens = 80  %-%- Reduced to ensure shorter responses',
    'max_tokens = 80,  -- Reduced to ensure shorter responses\n      provider = {\n         allow_fallbacks = true,\n         sort = "throughput"\n      }',
+   1
+)
+
+source = source:gsub(
+   'local source = game:HttpGet%(url, true%)%s*\n%s*local chunk, compileErr = loadstring%(source%)',
+   function()
+      return [[local source = game:HttpGet(url, true)
+
+   if label == "Rayfield" then
+      source = source:gsub(
+         "local Passthrough = false%s*\n%s*Topbar%.Title%.Text = Settings%.Name",
+         function()
+            return [[local Passthrough = false
+   if not Topbar:FindFirstChild("Title") then
+      local Title = Instance.new("TextLabel")
+      Title.Name = "Title"
+      Title.AnchorPoint = Vector2.new(0, 0.5)
+      Title.Position = UDim2.new(0, 15, 0.5, 0)
+      Title.Size = UDim2.new(1, -150, 1, 0)
+      Title.BackgroundTransparency = 1
+      Title.TextColor3 = Color3.fromRGB(240, 240, 240)
+      Title.TextTransparency = 1
+      Title.TextSize = 16
+      Title.Font = Enum.Font.GothamMedium
+      Title.TextXAlignment = Enum.TextXAlignment.Left
+      Title.Parent = Topbar
+   end
+   Topbar.Title.Text = Settings.Name]]
+         end,
+         1
+      )
+   end
+
+   local chunk, compileErr = loadstring(source)]]
+   end,
    1
 )
 
