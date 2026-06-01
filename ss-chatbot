@@ -117,21 +117,40 @@ source = source:gsub(
 )
 
 source = source:gsub(
-	'local function loadRemoteChunk%(url, label%)%s*\n%s*local source = game:HttpGet%(url, true%)',
+	'local function loadRemoteChunk%(url, label%).-return result%s*\nend',
 	function()
 		return [[local function loadRemoteChunk(url, label)
-   local source = game:HttpGet(url, true)]]
-	end,
-	1
-)
+   local source = game:HttpGet(url, true)
 
-source = source:gsub(
-	'if result == nil then%s*\n%s*error%(string%.format%("%[AI Chatbot%] %%s returned nil", label%)%)%s*\n%s*end',
-	function()
-		return [[if result == nil then
-      warn(string.format("[AI Chatbot] %s returned nil; continuing with empty table", label))
-      result = {}
-   end]]
+   if type(source) == "string" and source:match("^%s*%d+%s*$") then
+      warn(string.format("[AI Chatbot] %s returned numeric asset chunk; continuing with empty table", label))
+      return {}
+   end
+
+   local chunk, compileErr = loadstring(source)
+   if not chunk then
+      warn(string.format("[AI Chatbot] %s loadstring failed: %s", label, tostring(compileErr)))
+      return {}
+   end
+
+   local ok, result = pcall(chunk)
+   if not ok then
+      local message = tostring(result)
+      if message:find("attempt to call a nil value", 1, true) or message:match('%[string "%d+"%]') then
+         warn(string.format("[AI Chatbot] %s skipped bad numeric/runtime chunk: %s", label, message))
+         return {}
+      end
+
+      error(string.format("[AI Chatbot] %s runtime failed: %s", label, message))
+   end
+
+   if result == nil or type(result) == "number" then
+      warn(string.format("[AI Chatbot] %s returned %s; continuing with empty table", label, type(result)))
+      return {}
+   end
+
+   return result
+end]]
 	end,
 	1
 )
