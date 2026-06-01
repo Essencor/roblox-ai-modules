@@ -272,7 +272,7 @@ SSChatbotEnsureRayfieldAssetChildren(Rayfield)
 -- API key: inject default and replace all hardcoded keys.
 source = source:gsub('ApiKey = "",', 'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",', 1)
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
-source = source:gsub(escapePattern("sk-or-v1-23670df3e8d9c921af977a4e9202c2a750ee11f3d1f6479dda5372b89ac34d756d0"), DEFAULT_OPENROUTER_KEY)
+source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 
 -- Model declarations.
