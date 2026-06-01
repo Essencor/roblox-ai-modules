@@ -24,7 +24,37 @@ local function patchNumericLoadstringChunks()
 			end
 		end
 
-		return originalLoadstring(source, chunkName)
+		local isNumericChunk = type(chunkName) == "string" and chunkName:match("^%d+$")
+		local chunk, compileErr = originalLoadstring(source, chunkName)
+		if not chunk then
+			if isNumericChunk then
+				return function()
+					warn("[SS Chatbot] skipped bad numeric asset chunk:", tostring(chunkName))
+					return nil
+				end
+			end
+
+			return nil, compileErr
+		end
+
+		if isNumericChunk then
+			return function(...)
+				local ok, result = pcall(chunk, ...)
+				if not ok then
+					local message = tostring(result)
+					if message:find("attempt to call a nil value", 1, true) then
+						warn("[SS Chatbot] skipped bad numeric asset chunk:", chunkName)
+						return nil
+					end
+
+					error(message, 0)
+				end
+
+				return result
+			end
+		end
+
+		return chunk
 	end
 
 	env.loadstring = guardedLoadstring
