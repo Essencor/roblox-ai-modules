@@ -6,6 +6,61 @@ print("[SS Chatbot] loader v37 started")
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = "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"
 
+local function patchEasySpriteSingleCellRange()
+	local okService, ReplicatedStorage = pcall(function()
+		return game:GetService("ReplicatedStorage")
+	end)
+
+	if not okService then
+		return
+	end
+
+	local modules = ReplicatedStorage:FindFirstChild("Modules")
+	local easySprite = modules and modules:FindFirstChild("EasySprite")
+	local spriteSequencerModule = easySprite and easySprite:FindFirstChild("SpriteSequencer")
+
+	if not spriteSequencerModule or not spriteSequencerModule:IsA("ModuleScript") then
+		return
+	end
+
+	local okRequire, SpriteSequencer = pcall(require, spriteSequencerModule)
+	if not okRequire or type(SpriteSequencer) ~= "table" or type(SpriteSequencer.fromRange) ~= "function" then
+		return
+	end
+
+	if SpriteSequencer.__SSChatbotSingleCellRangePatched then
+		return
+	end
+
+	local originalFromRange = SpriteSequencer.fromRange
+	SpriteSequencer.fromRange = function(spriteSheet, fromCell, toCell)
+		if fromCell == toCell then
+			if type(SpriteSequencer.new) == "function" then
+				return SpriteSequencer.new(spriteSheet, { fromCell })
+			end
+
+			if spriteSheet and type(spriteSheet.display) == "function" then
+				spriteSheet.display(fromCell)
+			end
+
+			return {
+				play = function() end,
+				stop = function() end,
+				isPlaying = function()
+					return false
+				end
+			}
+		end
+
+		return originalFromRange(spriteSheet, fromCell, toCell)
+	end
+
+	SpriteSequencer.__SSChatbotSingleCellRangePatched = true
+	print("[SS Chatbot] patched EasySprite single-cell ranges")
+end
+
+pcall(patchEasySpriteSingleCellRange)
+
 local function escapePattern(text)
 	return (text:gsub("([^%w])", "%%%1"))
 end
