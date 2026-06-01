@@ -169,6 +169,28 @@ local AvailableModels = {
 )
 
 source = source:gsub(
+	'LoadedModules%.Pathfinding%.Navigate%(playerToGreet%.Name, "basic"%)[%s%S]-SendChatMessage%(greeting%)',
+	function()
+		return [[local pathTarget = playerToGreet.Character and (playerToGreet.Character:FindFirstChild("HumanoidRootPart") or playerToGreet.Character) or playerToGreet
+                  local pathStartedAt = tick()
+                  local pathOk = pcall(function()
+                     LoadedModules.Pathfinding.Navigate(pathTarget, "basic")
+                  end)
+                  local pathElapsed = tick() - pathStartedAt
+
+                  if not pathOk then
+                     warn("[AutoGreet] Pathfinding failed; sending greeting anyway")
+                  else
+                     print(string.format("[AutoGreet] Pathfinding finished in %.1fs", pathElapsed))
+                  end
+
+                  print("Sending greeting:", greeting)
+                  SendChatMessage(greeting)]]
+	end,
+	1
+)
+
+source = source:gsub(
 	'PathfindingEnabled = false,  %-%- Pathfinding module toggle',
 	function()
 		return 'PathfindingEnabled = false,  -- Pathfinding module toggle\n   RaycastingEnabled = false,  -- Raycasting vision module toggle'
