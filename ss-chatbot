@@ -1,4 +1,4 @@
-﻿-- SS Chatbot public loader v40
+-- SS Chatbot public loader v40
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
 print("[SS Chatbot] loader v40 started")
