@@ -30,7 +30,9 @@ local function patchNumericLoadstringChunks()
 
 	local function guardedLoadstring(source, chunkName)
 		if type(source) == "string" and source:match("^%s*%d+%s*$") then
-			return noopFactory
+			return function(...)
+				return nil
+			end
 		end
 
 		local isNumericChunk = type(chunkName) == "string" and chunkName:match("^%d+$")
@@ -295,7 +297,7 @@ source = source:gsub(
             error(message)
          end
 
-         if value == nil or type(value) == "number" then
+         if type(value) ~= "table" then
             warn("[SS Chatbot] Rayfield skipped non-library loadWithTimeout result:", tostring(value))
             return nil
          end
@@ -321,7 +323,7 @@ source = source:gsub(
                error(message)
             end
 
-            if value == nil or type(value) == "number" then
+            if type(value) ~= "table" then
                warn("[SS Chatbot] Rayfield skipped non-library reporter result:", tostring(value))
                return nil
             end
