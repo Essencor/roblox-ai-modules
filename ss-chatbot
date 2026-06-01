@@ -13,7 +13,7 @@ local function patchNumericLoadstringChunks()
 
 	local env = (getgenv and getgenv()) or _G
 	if env.__SSChatbotNumericLoadstringPatched then
-		return
+		return env.loadstring or _G.loadstring
 	end
 
 	local originalLoadstring = loadstring
@@ -68,12 +68,40 @@ local function patchNumericLoadstringChunks()
 	end
 
 	env.loadstring = guardedLoadstring
+	env.load = guardedLoadstring
 	_G.loadstring = guardedLoadstring
+	_G.load = guardedLoadstring
 	env.__SSChatbotNumericLoadstringPatched = true
 	print("[SS Chatbot] patched numeric loadstring chunks")
+	return guardedLoadstring
 end
 
-pcall(patchNumericLoadstringChunks)
+local okLoadstringPatch, guardedLoadstring = pcall(patchNumericLoadstringChunks)
+if not okLoadstringPatch or type(guardedLoadstring) ~= "function" then
+	guardedLoadstring = loadstring
+end
+
+local function makeGuardedEnvironment()
+	local baseEnv = (getgenv and getgenv()) or _G
+	local runtimeEnv = {}
+
+	setmetatable(runtimeEnv, {
+		__index = function(_, key)
+			if key == "loadstring" or key == "load" then
+				return guardedLoadstring
+			end
+			return baseEnv[key] or _G[key]
+		end,
+		__newindex = function(_, key, value)
+			baseEnv[key] = value
+			_G[key] = value
+		end
+	})
+
+	runtimeEnv.loadstring = guardedLoadstring
+	runtimeEnv.load = guardedLoadstring
+	return runtimeEnv
+end
 
 local function escapePattern(text)
 	return (text:gsub("([^%w])", "%%%1"))
@@ -410,6 +438,10 @@ source = source:gsub(
 local chunk, compileErr = loadstring(source)
 if not chunk then
 	error("[SS Chatbot] compile failed: " .. tostring(compileErr))
+end
+
+if type(setfenv) == "function" then
+	setfenv(chunk, makeGuardedEnvironment())
 end
 
 print("[SS Chatbot] source compiled. Starting original hub...")
