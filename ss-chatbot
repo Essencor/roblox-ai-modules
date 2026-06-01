@@ -3,7 +3,7 @@
 
 print("[SS Chatbot] loader v37 started")
 
-local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
+local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/main/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = "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"
 
 local function patchNumericLoadstringChunks()
