@@ -1,7 +1,7 @@
---[[
+﻿--[[
     INTEGRATED PATHFINDING MODULE V4
     Pathfinding + Raycasting Vision Integration
-    
+
     FEATURES:
     - Raycasting-powered obstacle avoidance
     - Pre-navigation safety checks
@@ -37,8 +37,8 @@ local Config = {
     MaxStuckAttempts = 20,  -- Allow many recovery attempts (was 8)
     DeathRadius = 10,
     MaxDeathZones = 50,
-    WaypointReachedDistance = 3,  -- Strict - must be close
-    FinalWaypointDistance = 4,    -- Final destination must be accurate
+    WaypointReachedDistance = 1.25,  -- Must be practically touching
+    FinalWaypointDistance = 1.5,     -- Final destination must be accurate
     ShowPath = false,
     ShowWaypoints = false,
     PathColor = Color3.new(0, 1, 0),
@@ -54,7 +54,7 @@ local Config = {
     VelocityCheckInterval = 0.5,
     MinVelocity = 0.5,
     WaypointSkipDistance = 6,
-    
+
     -- Raycasting Integration Settings
     UseRaycastingVision = true,
     PreNavigationScan = false,  -- Changed to false by default to avoid blocking navigation
@@ -228,52 +228,52 @@ local function PerformPreNavigationScan(targetPos)
     if not HasRaycasting() or not Config.PreNavigationScan then
         return true, nil
     end
-    
+
     Stats.raycastingUsed = Stats.raycastingUsed + 1
-    
+
     Log("Performing pre-navigation safety scan...", "INFO")
-    
+
     local scanSuccess = pcall(function()
         -- Check if we can see the target
         local hasLineOfSight, sightInfo = RaycastingVision.CheckLineOfSight(targetPos)
-        
+
         if hasLineOfSight and sightInfo then
             Log("Direct line of sight to target! Distance: " .. math.floor(sightInfo.distance) .. " studs", "INFO")
         end
-        
+
         -- Multi-range scan
         local multiScan = RaycastingVision.ScanMultiRange()
-        
+
         if multiScan then
             Log("Multi-range scan: " .. multiScan.clearestRange .. " range clear", "INFO")
         end
-        
+
         -- Check for immediate obstacles
         local forwardScan = RaycastingVision.ScanForward(10, 5)
-        
+
         if forwardScan and forwardScan.hasObstacle and forwardScan.minDistance < 3 then
             Log("Immediate obstacle detected at " .. math.floor(forwardScan.minDistance) .. " studs", "WARN")
             -- Don't block navigation, just warn
         end
-        
+
         -- COMPREHENSIVE: Check ALL studs along path to target
         if Config.CliffAvoidance then
             local rootPart = GetRootPart()
             if rootPart then
                 local currentPos = rootPart.Position
                 local directionToTarget = (targetPos - currentPos).Unit
-                
+
                 -- Build ground map for each stud
                 local groundMap = {}
                 local voidSections = {}
-                
+
                 -- Check EVERY stud from 1 to TerrainScanDistance
                 for stud = 1, Config.TerrainScanDistance do
                     local checkPoint = currentPos + (directionToTarget * stud)
                     local hasGround = RaycastingVision.CheckGround(checkPoint, 20)
                     groundMap[stud] = hasGround
                 end
-                
+
                 -- Find continuous void sections
                 local voidStart = nil
                 for stud = 1, #groundMap do
@@ -288,11 +288,11 @@ local function PerformPreNavigationScan(targetPos)
                         end
                     end
                 end
-                
+
                 if voidStart then
                     table.insert(voidSections, {start = voidStart, finish = #groundMap, length = #groundMap - voidStart + 1})
                 end
-                
+
                 -- Report detailed terrain analysis
                 if #voidSections > 0 then
                     Stats.cliffsAvoided = Stats.cliffsAvoided + 1
@@ -300,7 +300,7 @@ local function PerformPreNavigationScan(targetPos)
                     for stud = 1, #groundMap do
                         Log("  " .. stud .. " stud: " .. (groundMap[stud] and "✅ Safe" or "❌ Void"), "INFO")
                     end
-                    
+
                     Log("⚠️ Found " .. #voidSections .. " void section(s) on path:", "WARN")
                     for i, section in ipairs(voidSections) do
                         if section.length <= Config.MaxJumpableGapLength then
@@ -309,17 +309,17 @@ local function PerformPreNavigationScan(targetPos)
                             Log("  Section " .. i .. ": studs " .. section.start .. "-" .. section.finish .. " (length: " .. section.length .. ") - TOO LONG ❌", "WARN")
                         end
                     end
-                    
+
                     Log("Pathfinding will navigate around voids or jump over small gaps", "INFO")
                 end
             end
         end
     end)
-    
+
     if not scanSuccess then
         Log("Pre-navigation scan had errors, but continuing anyway", "WARN")
     end
-    
+
     Log("Pre-navigation scan complete", "INFO")
     return true, nil
 end
@@ -328,40 +328,40 @@ local function PerformContinuousScan()
     if not HasRaycasting() or not Config.ContinuousScanning then
         return true
     end
-    
+
     if tick() - State.lastSafetyCheck < Config.SafetyCheckInterval then
         return true
     end
-    
+
     State.lastSafetyCheck = tick()
-    
+
     local scanSuccess, scanResult = pcall(function()
         -- Quick forward scan for obstacles
         local forwardScan = RaycastingVision.ScanForward(10, 5)
-        
+
         if forwardScan and forwardScan.hasObstacle and forwardScan.minDistance < 2 then
             Log("Close obstacle detected during navigation at " .. math.floor(forwardScan.minDistance) .. " studs", "WARN")
             return false
         end
-        
+
         -- COMPREHENSIVE: Check ALL studs ahead for cliffs/voids
         if Config.CliffAvoidance then
             local rootPart = GetRootPart()
             if rootPart then
                 local currentPos = rootPart.Position
                 local lookDirection = rootPart.CFrame.LookVector
-                
+
                 -- Build ground map for each stud
                 local groundMap = {}
                 local voidSections = {}
-                
+
                 -- Check EVERY stud from 1 to TerrainScanDistance
                 for stud = 1, Config.TerrainScanDistance do
                     local checkPoint = currentPos + (lookDirection * stud)
                     local hasGround = RaycastingVision.CheckGround(checkPoint, 20)
                     groundMap[stud] = hasGround
                 end
-                
+
                 -- Find continuous void sections
                 local voidStart = nil
                 for stud = 1, #groundMap do
@@ -376,20 +376,20 @@ local function PerformContinuousScan()
                         end
                     end
                 end
-                
+
                 if voidStart then
                     table.insert(voidSections, {start = voidStart, finish = #groundMap, length = #groundMap - voidStart + 1})
                 end
-                
+
                 -- If we detect voids, report them
                 if #voidSections > 0 then
                     local firstVoid = voidSections[1]
-                    
+
                     -- Only warn about close voids (within half scan distance)
                     if firstVoid.start <= Config.TerrainScanDistance / 2 then
                         Stats.cliffsAvoided = Stats.cliffsAvoided + 1
                         Log("⚠️ Cliff ahead! Void at studs " .. firstVoid.start .. "-" .. firstVoid.finish .. " (length: " .. firstVoid.length .. ")", "WARN")
-                        
+
                         -- Don't stop for jumpable gaps
                         if firstVoid.length > Config.MaxJumpableGapLength then
                             Log("❌ Void too large to jump - stopping!", "ERROR")
@@ -401,15 +401,15 @@ local function PerformContinuousScan()
                 end
             end
         end
-        
+
         return true
     end)
-    
+
     if not scanSuccess then
         Log("Continuous scan error (ignoring): " .. tostring(scanResult), "WARN")
         return true  -- Don't block navigation on scan errors
     end
-    
+
     return scanResult
 end
 
@@ -417,20 +417,20 @@ local function FindClearPathWithVision()
     if not HasRaycasting() then
         return nil
     end
-    
+
     Log("Using raycasting to find clear path...", "INFO")
     Stats.visionRecoveries = Stats.visionRecoveries + 1
-    
+
     -- 360° scan to find clearest direction
     local circularScan = RaycastingVision.ScanCircular(15, 16)
-    
+
     if circularScan and #circularScan.clearDirections > 0 then
         -- Pick the clearest direction
         local bestDirection = circularScan.clearDirections[1]
         Log("Found clear direction using vision", "INFO")
         return bestDirection
     end
-    
+
     return nil
 end
 
@@ -478,7 +478,7 @@ end
 
 local function CreateWaypointMarker(position, color)
     if not Config.ShowWaypoints then return end
-    
+
     local part = Instance.new("Part")
     part.Size = Vector3.new(1, 1, 1)
     part.Position = position
@@ -488,9 +488,9 @@ local function CreateWaypointMarker(position, color)
     part.Material = Enum.Material.Neon
     part.Transparency = 0.5
     part.Parent = workspace
-    
+
     table.insert(State.visualizations, part)
-    
+
     task.delay(5, function()
         if part and part.Parent then
             part:Destroy()
@@ -511,7 +511,7 @@ local function AddDeathZone(position)
             return
         end
     end
-    
+
     table.insert(State.deathZones, {
         position = position,
         deaths = 1,
@@ -519,10 +519,10 @@ local function AddDeathZone(position)
         created = tick(),
         lastDeath = tick()
     })
-    
+
     Stats.deathsLearned = Stats.deathsLearned + 1
     Log("New death zone learned at " .. tostring(position), "WARN")
-    
+
     if #State.deathZones > Config.MaxDeathZones then
         table.remove(State.deathZones, 1)
     end
@@ -543,12 +543,12 @@ local function MonitorDeath()
         if not character then
             character = LocalPlayer.CharacterAdded:Wait()
         end
-        
+
         local humanoid = GetHumanoid()
         if not humanoid then
             return
         end
-        
+
         humanoid.Died:Connect(function()
             local rootPart = GetRootPart()
             if rootPart and State.isNavigating then
@@ -566,12 +566,12 @@ end
 local function UpdatePositionHistory()
     local rootPart = GetRootPart()
     if not rootPart then return end
-    
+
     table.insert(State.positionHistory, {
         position = rootPart.Position,
         time = tick()
     })
-    
+
     if #State.positionHistory > 10 then
         table.remove(State.positionHistory, 1)
     end
@@ -580,13 +580,13 @@ end
 local function CalculateVelocity()
     local rootPart = GetRootPart()
     if not rootPart then return Vector3.new(0, 0, 0) end
-    
+
     if State.lastPosition then
         local distance = rootPart.Position - State.lastPosition
         local velocity = distance / Config.VelocityCheckInterval
         return velocity
     end
-    
+
     return Vector3.new(0, 0, 0)
 end
 
@@ -597,32 +597,32 @@ end
 local function IsStuckAdvanced()
     local rootPart = GetRootPart()
     if not rootPart then return false end
-    
+
     local currentPos = rootPart.Position
     local timeSinceMove = tick() - State.lastMoveTime
-    
+
     -- Check 1: Distance
     if State.lastPosition then
         local distanceMoved = GetDistance(currentPos, State.lastPosition)
-        
+
         if distanceMoved < Config.StuckDistance and timeSinceMove > Config.StuckTimeout then
             Log("Stuck: Distance check (moved " .. math.floor(distanceMoved * 10) / 10 .. " studs)", "WARN")
             return true, "distance"
         end
-        
+
         if distanceMoved > Config.StuckDistance then
             State.lastMoveTime = tick()
             State.consecutiveStuckFrames = 0
         end
     end
-    
+
     -- Check 2: Velocity
     local velocity = CalculateVelocity()
     local velocityMagnitude = velocity.Magnitude
-    
+
     if velocityMagnitude < Config.MinVelocity and timeSinceMove > Config.StuckTimeout then
         State.consecutiveStuckFrames = State.consecutiveStuckFrames + 1
-        
+
         -- Increased from 5 to 15 - be much more patient before marking as stuck
         if State.consecutiveStuckFrames > 15 then
             Log("Stuck: Velocity check (speed: " .. math.floor(velocityMagnitude * 100) / 100 .. ")", "WARN")
@@ -631,35 +631,35 @@ local function IsStuckAdvanced()
     else
         State.consecutiveStuckFrames = 0
     end
-    
+
     -- Check 3: Position oscillation
     if #State.positionHistory >= 6 then
         local recent = State.positionHistory
         local avgDistance = 0
-        
+
         for i = #recent - 5, #recent do
             avgDistance = avgDistance + GetDistance(recent[i].position, currentPos)
         end
         avgDistance = avgDistance / 6
-        
+
         if avgDistance < 3 and timeSinceMove > Config.StuckTimeout * 1.5 then
             Log("Stuck: Oscillation (bouncing in " .. math.floor(avgDistance * 10) / 10 .. " stud radius)", "WARN")
             return true, "oscillation"
         end
     end
-    
+
     -- Check 4: Humanoid state
     local humanoid = GetHumanoid()
     if humanoid then
         local state = humanoid:GetState()
-        
+
         -- Check if sitting (stuck in seat)
         if state == Enum.HumanoidStateType.Seated then
             Log("Stuck: Seated in chair/seat", "WARN")
             return true, "seated"
         end
-        
-        if state == Enum.HumanoidStateType.Physics or 
+
+        if state == Enum.HumanoidStateType.Physics or
            state == Enum.HumanoidStateType.Ragdoll or
            state == Enum.HumanoidStateType.FallingDown then
             if timeSinceMove > 2 then
@@ -668,7 +668,7 @@ local function IsStuckAdvanced()
             end
         end
     end
-    
+
     State.lastPosition = currentPos
     State.lastVelocity = velocity
     return false, nil
@@ -682,11 +682,11 @@ local function RecoverFromStuck(stuckType)
     Log("Attempting stuck recovery (type: " .. tostring(stuckType) .. ")...", "WARN")
     Stats.stucksRecovered = Stats.stucksRecovered + 1
     State.stuckCount = State.stuckCount + 1
-    
+
     local rootPart = GetRootPart()
     local humanoid = GetHumanoid()
     if not rootPart or not humanoid then return false end
-    
+
     -- IMMEDIATE seat recovery - highest priority!
     if stuckType == "seated" then
         Log("Recovery: EJECTING FROM SEAT!", "WARN")
@@ -699,7 +699,7 @@ local function RecoverFromStuck(stuckType)
         -- Jump again to be sure
         humanoid.Jump = true
         task.wait(0.3)
-        
+
         State.lastMoveTime = tick()
         State.lastPosition = rootPart.Position
         State.consecutiveStuckFrames = 0
@@ -707,7 +707,7 @@ local function RecoverFromStuck(stuckType)
         Log("Ejected from seat successfully", "INFO")
         return true
     end
-    
+
     -- Try vision-guided recovery first
     if Config.VisionGuidedRecovery and HasRaycasting() and State.stuckCount % 2 == 0 then
         local clearDirection = FindClearPathWithVision()
@@ -723,40 +723,40 @@ local function RecoverFromStuck(stuckType)
             return true
         end
     end
-    
+
     -- Standard recovery methods
     local recoveryMethod = ((State.stuckCount - 1) % 8) + 1
-    
+
     if recoveryMethod == 1 then
         Log("Recovery 1/8: Double Jump")
         for i = 1, 2 do
             humanoid.Jump = true
             task.wait(0.2)
         end
-        
+
     elseif recoveryMethod == 2 then
         Log("Recovery 2/8: Move backwards")
         local backwardPos = rootPart.Position - rootPart.CFrame.LookVector * 6
         humanoid:MoveTo(backwardPos)
         task.wait(1)
-        
+
     elseif recoveryMethod == 3 then
         Log("Recovery 3/8: Move right")
         local sidePos = rootPart.Position + rootPart.CFrame.RightVector * 6
         humanoid:MoveTo(sidePos)
         task.wait(1)
-        
+
     elseif recoveryMethod == 4 then
         Log("Recovery 4/8: Move left")
         local sidePos = rootPart.Position - rootPart.CFrame.RightVector * 6
         humanoid:MoveTo(sidePos)
         task.wait(1)
-        
+
     elseif recoveryMethod == 5 then
         Log("Recovery 5/8: Teleport up")
         rootPart.CFrame = rootPart.CFrame + Vector3.new(0, 4, 0)
         task.wait(0.5)
-        
+
     elseif recoveryMethod == 6 then
         Log("Recovery 6/8: Jump backwards")
         humanoid.Jump = true
@@ -764,7 +764,7 @@ local function RecoverFromStuck(stuckType)
         local backwardPos = rootPart.Position - rootPart.CFrame.LookVector * 8
         humanoid:MoveTo(backwardPos)
         task.wait(1)
-        
+
     elseif recoveryMethod == 7 then
         Log("Recovery 7/8: Rotate 90° and move")
         rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, math.rad(90), 0)
@@ -772,7 +772,7 @@ local function RecoverFromStuck(stuckType)
         local forwardPos = rootPart.Position + rootPart.CFrame.LookVector * 5
         humanoid:MoveTo(forwardPos)
         task.wait(1)
-        
+
     else
         Log("Recovery 8/8: Teleport to last successful waypoint")
         if State.lastSuccessfulWaypoint then
@@ -783,12 +783,12 @@ local function RecoverFromStuck(stuckType)
             task.wait(0.5)
         end
     end
-    
+
     State.lastMoveTime = tick()
     State.lastPosition = rootPart.Position
     State.consecutiveStuckFrames = 0
     State.positionHistory = {}
-    
+
     return true
 end
 
@@ -800,10 +800,10 @@ local function ExecuteJump(jumpType)
     local humanoid = GetHumanoid()
     local rootPart = GetRootPart()
     if not humanoid or not rootPart then return false end
-    
+
     Log("Executing jump: " .. (jumpType or "normal"))
     Stats.jumpsExecuted = Stats.jumpsExecuted + 1
-    
+
     if jumpType == "high_jump" then
         Log("High jump: fast triple jump sequence")
         humanoid.Jump = true
@@ -813,22 +813,22 @@ local function ExecuteJump(jumpType)
             task.wait(0.08)
             humanoid.Jump = true
         end)
-        
+
     elseif jumpType == "gap_jump" then
         Log("Gap jump: fast jump with momentum")
         humanoid.Jump = true
-        
+
     else
         Log("Normal jump: fast single hop")
         humanoid.Jump = true
     end
-    
+
     return true
 end
 
 local function CheckJumpRequired(currentPos, nextPos)
     local heightDiff = nextPos.Y - currentPos.Y
-    
+
     if HasRaycasting() and Config.UseRaycastJumpAnalysis and type(RaycastingVision.AnalyzeMovementSegment) == "function" then
         local ok, analysis = pcall(function()
             return RaycastingVision.AnalyzeMovementSegment(currentPos, nextPos)
@@ -855,30 +855,30 @@ local function CheckJumpRequired(currentPos, nextPos)
     if heightDiff > 4 then
         return true, "high_jump"
     end
-    
+
     -- Check for small height differences that still need a jump
     if heightDiff > 1.5 then
         return true, "normal"
     end
-    
+
     -- COMPREHENSIVE: Check EVERY stud from 1-10 and map ground/void
     if HasRaycasting() then
         local directionToNext = (nextPos - currentPos).Unit
         local distanceToNext = GetDistance(currentPos, nextPos)
         local checkDistance = math.min(distanceToNext, Config.TerrainScanDistance)
-        
+
         -- Build ground map for each stud
         local groundMap = {}
         local voidSections = {}
-        
+
         -- Check EVERY stud individually (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
         for stud = 1, math.floor(checkDistance) do
             local checkPoint = currentPos + (directionToNext * stud)
             local hasGround = RaycastingVision.CheckGround(checkPoint, 20)
-            
+
             groundMap[stud] = hasGround
         end
-        
+
         -- Analyze the ground map to find continuous void sections
         local voidStart = nil
         for stud = 1, #groundMap do
@@ -896,26 +896,26 @@ local function CheckJumpRequired(currentPos, nextPos)
                 end
             end
         end
-        
+
         -- If void continues to end
         if voidStart then
             table.insert(voidSections, {start = voidStart, finish = #groundMap, length = #groundMap - voidStart + 1})
         end
-        
+
         -- Report findings
         if #voidSections > 0 then
             Log("📊 Ground Map Analysis:", "INFO")
             for stud = 1, #groundMap do
                 Log("  " .. stud .. " stud" .. (stud > 1 and "s" or "") .. ": " .. (groundMap[stud] and "✅ Land" or "❌ VOID"), "INFO")
             end
-            
+
             for i, section in ipairs(voidSections) do
                 Log("⚠️ Void section #" .. i .. ": studs " .. section.start .. "-" .. section.finish .. " (length: " .. section.length .. " studs)", "WARN")
             end
-            
+
             -- Find the first/closest void section
             local firstVoid = voidSections[1]
-            
+
             -- Decide if we can jump over it
             if firstVoid.length <= Config.MaxJumpableGapLength then
                 Log("✅ Can jump over void (length: " .. firstVoid.length .. " studs, max: " .. Config.MaxJumpableGapLength .. ")", "INFO")
@@ -927,12 +927,12 @@ local function CheckJumpRequired(currentPos, nextPos)
             end
         end
     end
-    
+
     -- Check if there's an obstacle ahead at ground level
     if HasRaycasting() then
         local directionToWaypoint = (nextPos - currentPos).Unit
         local checkDistance = math.min(GetDistance(currentPos, nextPos), 8)
-        
+
         -- Cast ray at waist height to detect walls/obstacles
         local hasObstacle = RaycastingVision.ScanForward(checkDistance, 3)
         if hasObstacle and hasObstacle.hasObstacle and hasObstacle.minDistance < checkDistance * 0.7 then
@@ -940,7 +940,7 @@ local function CheckJumpRequired(currentPos, nextPos)
             return true, "normal"
         end
     end
-    
+
     return false, nil
 end
 
@@ -952,12 +952,12 @@ local function ComputePath(startPos, endPos, useDeathAvoidance)
     if useDeathAvoidance == nil then
         useDeathAvoidance = true
     end
-    
+
     if useDeathAvoidance and IsInDeathZone(endPos) then
         Log("Target is in death zone", "ERROR")
         return nil
     end
-    
+
     local path = PathfindingService:CreatePath({
         AgentRadius = 2,
         AgentHeight = 5,
@@ -969,28 +969,28 @@ local function ComputePath(startPos, endPos, useDeathAvoidance)
             Danger = 999999
         }
     })
-    
+
     local success, errorMsg = pcall(function()
         path:ComputeAsync(startPos, endPos)
     end)
-    
+
     if not success then
         Log("Path computation failed: " .. tostring(errorMsg), "ERROR")
         return nil
     end
-    
+
     if path.Status ~= Enum.PathStatus.Success then
         Log("Path status: " .. tostring(path.Status), "WARN")
         return nil
     end
-    
+
     local waypoints = path:GetWaypoints()
-    
+
     if #waypoints == 0 then
         Log("No waypoints generated", "ERROR")
         return nil
     end
-    
+
     if useDeathAvoidance and Config.UseSmartPathing then
         local filteredWaypoints = {}
         for i, waypoint in ipairs(waypoints) do
@@ -1001,17 +1001,17 @@ local function ComputePath(startPos, endPos, useDeathAvoidance)
                 Log("Waypoint " .. i .. " filtered (death zone)", "WARN")
             end
         end
-        
+
         if #filteredWaypoints < 2 then
             Log("Too many waypoints in death zones", "ERROR")
             return nil
         end
-        
+
         waypoints = filteredWaypoints
     end
-    
+
     Log("Path computed: " .. #waypoints .. " waypoints, distance: " .. math.floor(GetDistance(startPos, endPos)))
-    
+
     return {
         path = path,
         waypoints = waypoints,
@@ -1027,28 +1027,28 @@ local function OptimizeWaypoints(waypoints)
     if not Config.UseSmartPathing or #waypoints < 3 then
         return waypoints
     end
-    
+
     Log("Optimizing " .. #waypoints .. " waypoints...")
-    
+
     local optimized = {waypoints[1]}
     local minDistance = 3
-    
+
     for i = 2, #waypoints - 1 do
         local prevPos = optimized[#optimized].Position
         local currentPos = waypoints[i].Position
         local distance = GetDistance(prevPos, currentPos)
-        
+
         if distance >= minDistance then
             table.insert(optimized, waypoints[i])
         else
             Stats.waypointsSkipped = Stats.waypointsSkipped + 1
         end
     end
-    
+
     table.insert(optimized, waypoints[#waypoints])
-    
+
     Log("Waypoints optimized: " .. #waypoints .. " -> " .. #optimized)
-    
+
     return optimized
 end
 
@@ -1064,16 +1064,16 @@ local function CanSkipToWaypoint(currentPos, targetWaypoint, intermediateWaypoin
             local rootPart = GetRootPart()
             if rootPart then
                 local directDist = GetDistance(rootPart.Position, targetWaypoint.Position)
-                local intermediateDist = GetDistance(rootPart.Position, intermediateWaypoint.Position) + 
+                local intermediateDist = GetDistance(rootPart.Position, intermediateWaypoint.Position) +
                                          GetDistance(intermediateWaypoint.Position, targetWaypoint.Position)
-                
+
                 if directDist < intermediateDist * 0.85 then
                     return true
                 end
             end
         end
     end
-    
+
     return false
 end
 
@@ -1176,6 +1176,35 @@ local function MoveTowardPosition(position, timeout, navigationId)
     return false
 end
 
+local function ConfirmWaypointArrival(waypointPos, reachedDistance, navigationId, stableTime)
+    local rootPart = GetRootPart()
+    if not rootPart then
+        return false
+    end
+
+    stableTime = stableTime or 0.25
+    local confirmStart = tick()
+
+    while tick() - confirmStart < stableTime do
+        if navigationId and not IsActiveNavigation(navigationId) then
+            return false
+        end
+
+        rootPart = GetRootPart()
+        if not rootPart then
+            return false
+        end
+
+        if GetDistance(rootPart.Position, waypointPos) > reachedDistance then
+            return false
+        end
+
+        task.wait(0.03)
+    end
+
+    return true
+end
+
 local function TryUseLadder(ladderHit, targetPos, navigationId)
     if not ladderHit then return false end
 
@@ -1235,20 +1264,20 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     local humanoid = GetHumanoid()
     local rootPart = GetRootPart()
     if not humanoid or not rootPart then return false end
-    
+
     local waypointPos = waypoint.Position
     local isFinalWaypoint = (waypointIndex == totalWaypoints)
     local reachedDistance = isFinalWaypoint and Config.FinalWaypointDistance or Config.WaypointReachedDistance
     local jumpExecuted = false
-    
+
     if isFinalWaypoint then
         Log("Moving to FINAL waypoint " .. waypointIndex .. "/" .. totalWaypoints .. " (lenient: " .. reachedDistance .. " studs)", "INFO")
     else
         Log("Moving to waypoint " .. waypointIndex .. "/" .. totalWaypoints, "INFO")
     end
-    
+
     CreateWaypointMarker(waypointPos, Config.WaypointColor)
-    
+
     if Config.LadderAssist and waypointPos.Y - rootPart.Position.Y >= Config.LadderUseMinHeightGain then
         TryUseHelpfulLadder(waypointPos, navigationId)
     end
@@ -1263,7 +1292,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             humanoid.Jump = true
         end
     end
-    
+
     -- IMMEDIATE pre-check: Do we need to jump to reach this waypoint?
     if Config.UseJumpOptimization then
         local needsJump, jumpType = CheckJumpRequired(rootPart.Position, waypointPos)
@@ -1273,60 +1302,76 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             jumpExecuted = true
         end
     end
-    
+
     humanoid:MoveTo(waypointPos)
-    
+
     local startTime = tick()
     local timeout = isFinalWaypoint and 30 or 20  -- Much more time for jumps and complex navigation
     local reached = false
     local checkInterval = 0
     local lastJumpCheck = 0
     local closestDistance = math.huge
+    local lastProgressDistance = math.huge
+    local lastProgressTime = tick()
     local lastMoveToTime = tick()
     local lastScanTime = 0  -- Throttle scanning
     local lastProgressLog = 0
-    
+
     while tick() - startTime < timeout do
         if not IsActiveNavigation(navigationId) then
             return false
         end
-        
+
         local currentPos = rootPart.Position
         local distance = GetDistance(currentPos, waypointPos)
-        
+
         -- Re-issue MoveTo at a steady cadence instead of every frame.
         if tick() - lastMoveToTime >= Config.MoveToRefreshInterval then
             humanoid:MoveTo(waypointPos)
             lastMoveToTime = tick()
         end
-        
+
+        if tick() - lastProgressTime >= 0.9 then
+            humanoid:MoveTo(waypointPos)
+            humanoid.Jump = true
+            lastMoveToTime = tick()
+            lastProgressTime = tick()
+        end
+
         -- Track closest distance
         if distance < closestDistance then
             closestDistance = distance
             State.lastMoveTime = tick()  -- Update move time when making progress
         end
-        
+
+        if distance < lastProgressDistance - 0.1 then
+            lastProgressDistance = distance
+            lastProgressTime = tick()
+        end
+
         -- Check if reached (STRICT)
         if distance <= reachedDistance then
-            reached = true
-            State.lastSuccessfulWaypoint = currentPos
-            
-            -- Reward progress: reduce stuck count on successful waypoint
-            if State.stuckCount > 0 then
-                State.stuckCount = math.max(0, State.stuckCount - 2)
+            if ConfirmWaypointArrival(waypointPos, reachedDistance, navigationId, isFinalWaypoint and 0.5 or 0.35) then
+                reached = true
+                State.lastSuccessfulWaypoint = currentPos
+
+                -- Reward progress: reduce stuck count on successful waypoint
+                if State.stuckCount > 0 then
+                    State.stuckCount = math.max(0, State.stuckCount - 2)
+                end
+
+                Log("✓ Waypoint " .. waypointIndex .. " reached! (distance: " .. math.floor(distance) .. " studs)", "INFO")
+                break
             end
-            
-            Log("✓ Waypoint " .. waypointIndex .. " reached! (distance: " .. math.floor(distance) .. " studs)", "INFO")
-            break
         end
-        
+
         -- CRITICAL: Check if seated and eject immediately (no wait)
         local humanoidState = humanoid:GetState()
         if humanoidState == Enum.HumanoidStateType.Seated then
             humanoid.Jump = true
             humanoid:ChangeState(Enum.HumanoidStateType.Running)
         end
-        
+
         -- Continuous jump checking (execute in coroutine to not pause movement)
         if Config.UseJumpOptimization and not jumpExecuted then
             if tick() - lastJumpCheck >= Config.JumpCheckInterval then
@@ -1339,7 +1384,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
                 lastJumpCheck = tick()
             end
         end
-        
+
         -- MINIMAL stuck detection - only if completely stuck (no progress at all)
         if tick() - State.lastMoveTime > 5 then  -- 5 seconds of NO progress at all
             if State.stuckCount >= Config.MaxStuckAttempts then
@@ -1351,21 +1396,21 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             State.stuckCount = State.stuckCount + 1
             State.lastMoveTime = tick()
         end
-        
+
         -- Progress indicator (throttled)
         if tick() - lastProgressLog > 3 and distance < closestDistance then
             Log("💪 Progress: " .. math.floor(distance) .. " studs to go")
             lastProgressLog = tick()
         end
-        
+
         task.wait(0.03)  -- Very fast checking, minimal wait
     end
-    
+
     if not reached then
         Log("Waypoint " .. waypointIndex .. "/" .. totalWaypoints .. " timeout (closest: " .. math.floor(closestDistance) .. " studs)", "WARN")
         return false  -- Must actually reach waypoint, no "close enough"
     end
-    
+
     return reached
 end
 
@@ -1377,24 +1422,24 @@ local function AttemptReroute(currentPos, targetPos)
     if not Config.UseDynamicRerouting then
         return nil
     end
-    
+
     if State.rerouteAttempts >= 3 then
         Log("Max reroute attempts reached", "ERROR")
         return nil
     end
-    
+
     State.rerouteAttempts = State.rerouteAttempts + 1
     Stats.pathsRerouted = Stats.pathsRerouted + 1
-    
+
     Log("Attempting reroute " .. State.rerouteAttempts .. "/3 from current position", "WARN")
-    
+
     local newPath = ComputePath(currentPos, targetPos, true)
-    
+
     if newPath then
         Log("Reroute successful - " .. #newPath.waypoints .. " waypoints", "INFO")
         return newPath
     end
-    
+
     return nil
 end
 
@@ -1403,23 +1448,23 @@ local function FollowPath(pathData, navigationId)
         Log("Invalid path data", "ERROR")
         return false
     end
-    
+
     local waypoints = OptimizeWaypoints(pathData.waypoints)
     State.currentWaypointIndex = 1
     State.currentPath = {waypoints = waypoints}
-    
+
     Log("Following path with " .. #waypoints .. " waypoints")
-    
+
     for i, waypoint in ipairs(waypoints) do
         if not IsActiveNavigation(navigationId) then
             Log("Navigation cancelled", "WARN")
             return false
         end
-        
+
         State.currentWaypointIndex = i
-        
+
         local success = MoveToWaypoint(waypoint, i, #waypoints, navigationId)
-        
+
         if not success then
             if not IsActiveNavigation(navigationId) then
                 Log("Navigation cancelled", "WARN")
@@ -1430,7 +1475,7 @@ local function FollowPath(pathData, navigationId)
             if i < #waypoints - 1 then
                 -- Not at final waypoints yet, try rerouting
                 Log("Failed at waypoint " .. i .. "/" .. #waypoints .. " - attempting reroute", "WARN")
-                
+
                 local rootPart = GetRootPart()
                 if rootPart then
                     local newPath = AttemptReroute(rootPart.Position, State.targetPosition)
@@ -1438,7 +1483,7 @@ local function FollowPath(pathData, navigationId)
                         return FollowPath(newPath, navigationId)
                     end
                 end
-                
+
                 Log("Reroute failed", "ERROR")
                 return false
             else
@@ -1447,10 +1492,15 @@ local function FollowPath(pathData, navigationId)
                 return false
             end
         end
-        
+
         task.wait(0.1)
     end
-    
+
+    if rootPart and GetDistance(rootPart.Position, endPos) > Config.FinalWaypointDistance then
+        Log("❌ Path finished but final target was not actually reached", "ERROR")
+        return false
+    end
+
     Log("✅ Path completed successfully - reached all waypoints!", "INFO")
     return true
 end
@@ -1463,44 +1513,44 @@ function PathfindingModule.Navigate(target, mode)
     PathfindingModule.Stop()
     State.navigationId = State.navigationId + 1
     local navigationId = State.navigationId
-    
+
     State.stuckCount = 0
     State.lastMoveTime = tick()
     State.positionHistory = {}
     State.consecutiveStuckFrames = 0
     State.rerouteAttempts = 0
-    
+
     local rootPart = GetRootPart()
     if not rootPart then
         Log("❌ No character root part found", "ERROR")
         return false
     end
-    
+
     local startPos = rootPart.Position
     local endPos = GetPosition(target)
-    
+
     if not endPos then
         Log("❌ Invalid target - could not get position", "ERROR")
         Log("Target type: " .. type(target), "ERROR")
         return false
     end
-    
+
     local distance = GetDistance(startPos, endPos)
     Log("📍 Navigation requested:", "INFO")
     Log("  Start: " .. tostring(startPos), "INFO")
     Log("  End: " .. tostring(endPos), "INFO")
     Log("  Distance: " .. math.floor(distance) .. " studs", "INFO")
-    
+
     if distance > Config.MaxPathDistance then
         Log("❌ Target too far: " .. math.floor(distance) .. " studs (max: " .. Config.MaxPathDistance .. ")", "ERROR")
         return false
     end
-    
+
     if distance < 5 then
         Log("✅ Already very close to target (" .. math.floor(distance) .. " studs)", "INFO")
         return true
     end
-    
+
     CreateDestinationMarker(endPos)
 
     State.isNavigating = true
@@ -1508,9 +1558,9 @@ function PathfindingModule.Navigate(target, mode)
     State.startTime = tick()
     local navigationStartTime = State.startTime
     Stats.totalPaths = Stats.totalPaths + 1
-    
+
     Log("🚀 Starting navigation, distance: " .. math.floor(distance) .. " studs", "INFO")
-    
+
     if HasRaycasting() then
         Log("👁️  Raycasting vision: ACTIVE", "INFO")
         StartRaycastMapping()
@@ -1518,7 +1568,7 @@ function PathfindingModule.Navigate(target, mode)
     else
         Log("⚠️  Raycasting vision: DISABLED", "WARN")
     end
-    
+
     -- Pre-navigation scan
     local safeToNavigate, reason = PerformPreNavigationScan(endPos)
     if not safeToNavigate then
@@ -1531,12 +1581,12 @@ function PathfindingModule.Navigate(target, mode)
         ClearDestinationMarker()
         return false
     end
-    
+
     ClearVisualizations()
-    
+
     local maxAttempts = Config.MaxRetries
     local success = false
-    
+
     for attempt = 1, maxAttempts do
         if not IsActiveNavigation(navigationId) then
             return false
@@ -1549,15 +1599,15 @@ function PathfindingModule.Navigate(target, mode)
                 return false
             end
         end
-        
+
         Log("📊 Computing path (attempt " .. attempt .. ")...", "INFO")
         local pathData = ComputePath(rootPart.Position, endPos, true)
-        
+
         if pathData then
             Log("✅ Path computed successfully!", "INFO")
             State.currentPath = pathData
             success = FollowPath(pathData, navigationId)
-            
+
             if success then
                 Log("🎉 Path completed!", "INFO")
                 break
@@ -1566,7 +1616,7 @@ function PathfindingModule.Navigate(target, mode)
             end
         else
             Log("❌ Path computation failed (attempt " .. attempt .. ")", "ERROR")
-            
+
             if attempt < maxAttempts then
                 -- Try without death avoidance
                 Log("🔄 Retrying without death zone avoidance...", "INFO")
@@ -1583,35 +1633,35 @@ function PathfindingModule.Navigate(target, mode)
             end
         end
     end
-    
+
     if not IsActiveNavigation(navigationId) then
         return false
     end
 
     local duration = tick() - navigationStartTime
     State.isNavigating = false
-    
+
     -- VERIFY we actually reached the destination, not just completed waypoints
     if success and rootPart then
         local finalDistance = GetDistance(rootPart.Position, endPos)
-        
+
         -- Must be within 8 studs to be considered success
         if finalDistance > 8 then
             Log("⚠️ Completed path but still " .. math.floor(finalDistance) .. " studs away - marking as FAILED", "WARN")
             success = false
         end
     end
-    
+
     if success then
         Stats.successfulPaths = Stats.successfulPaths + 1
         Stats.totalPathTime = Stats.totalPathTime + duration
         Stats.averagePathTime = Stats.totalPathTime / Stats.successfulPaths
-        
+
         local finalDistance = GetDistance(rootPart.Position, endPos)
         Log("✅ Navigation successful! Duration: " .. math.floor(duration) .. "s, Final distance: " .. math.floor(finalDistance) .. " studs", "INFO")
     else
         Stats.failedPaths = Stats.failedPaths + 1
-        
+
         local finalDistance = rootPart and GetDistance(rootPart.Position, endPos) or 0
         Log("❌ Navigation failed after " .. math.floor(duration) .. "s (final distance: " .. math.floor(finalDistance) .. " studs)", "ERROR")
         Log("💡 Possible reasons:", "INFO")
@@ -1620,7 +1670,7 @@ function PathfindingModule.Navigate(target, mode)
         Log("  - Character got stuck", "INFO")
         Log("  - Death zones blocking path", "INFO")
     end
-    
+
     State.currentPath = nil
     State.currentWaypointIndex = 0
     State.targetPosition = nil
@@ -1640,7 +1690,7 @@ function PathfindingModule.Stop()
     if State.isNavigating then
         Log("Stopping navigation", "INFO")
         State.isNavigating = false
-        
+
         local humanoid = GetHumanoid()
         if humanoid then
             local rootPart = GetRootPart()
@@ -1652,7 +1702,7 @@ function PathfindingModule.Stop()
     State.currentPath = nil
     State.currentWaypointIndex = 0
     State.targetPosition = nil
-    
+
     ClearDestinationMarker()
     ClearVisualizations()
 end
