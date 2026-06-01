@@ -60,7 +60,7 @@ local Config = {
     ReflectionBounceCount = 2,
     ReflectionDistance = 45,
     ReflectionEveryNRays = 2,
-    ReflectionSurfaceOffset = 0.08,
+    ReflectionSurfaceOffset = 0.15,
     ReflectionColor = Color3.new(1, 0.85, 0),
 
     -- Detection
@@ -737,6 +737,12 @@ local function GetDomeDirection(rayIndex)
 end
 
 local function ReflectDirection(direction, normal)
+    -- Back-face hit: ray came through the inside of a surface so the normal
+    -- points the same way as the ray.  Reflecting in this case produces a
+    -- bogus direction, so skip it entirely.
+    if direction:Dot(normal) >= 0 then
+        return nil
+    end
     local reflected = direction - (2 * direction:Dot(normal) * normal)
     if reflected.Magnitude < 0.001 then
         return nil
@@ -1578,3 +1584,4 @@ Log("Features: Forward Scan, 360° Scan, Ground Detection, LOS, Terrain Profile,
 Log("Performance: Caching enabled, " .. Config.MaxRaysPerFrame .. " max rays/frame")
 
 return RaycastingVision
+
