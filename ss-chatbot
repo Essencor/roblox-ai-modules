@@ -263,6 +263,20 @@ SSChatbotEnsureRayfieldAssetChildren(Rayfield)
             end
             return value]], 1)
 
+      source = source:gsub(
+         "local prompt = useStudio and require%(script%.Parent%.prompt%) or loadWithTimeout%('https://raw%.githubusercontent%.com/SiriusSoftwareLtd/Sirius/refs/heads/request/prompt%.lua'%)",
+         "local prompt = nil",
+         1
+      )
+
+      source = source:gsub(
+         "local Icons = useStudio and require%(script%.Parent%.icons%) or loadWithTimeout%('https://raw%.githubusercontent%.com/SiriusSoftwareLtd/Rayfield/refs/heads/main/icons%.lua'%)",
+         "local Icons = nil",
+         1
+      )
+
+      source = source:gsub("local requestsDisabled = false", "local requestsDisabled = true", 1)
+
       source = source:gsub("Rayfield%.Enabled = false", rayfieldAssetRepair .. "\nRayfield.Enabled = false", 1)
    end]]
 	end,
