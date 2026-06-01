@@ -101,6 +101,22 @@ source = source:gsub(escapePattern("sk-or-v1-23670df3e8d9c921af977a4e9202c2a750e
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 
 source = source:gsub(
+	'PathfindingEnabled = false,  %-%- Pathfinding module toggle',
+	function()
+		return 'PathfindingEnabled = false,  -- Pathfinding module toggle\n   RaycastingEnabled = false,  -- Raycasting vision module toggle'
+	end,
+	1
+)
+
+source = source:gsub(
+	'Pathfinding = "https://raw%.githubusercontent%.com/Essencor/roblox%-ai%-modules/main/pathfinding%-module"',
+	function()
+		return 'Pathfinding = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/main/pathfinding-module",\n   Raycasting = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/main/raycasting_vision-module"'
+	end,
+	1
+)
+
+source = source:gsub(
 	'local function loadRemoteChunk%(url, label%)%s*\n%s*local source = game:HttpGet%(url, true%)',
 	function()
 		return [[local function loadRemoteChunk(url, label)
@@ -124,6 +140,183 @@ source = source:gsub(
 	'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
 	function()
 		return 'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]'
+	end,
+	1
+)
+
+local raycastingModuleBlock = [==[
+-- ========================================
+-- RAYCASTING VISION MODULE
+-- ========================================
+
+local RaycastingSection = ModulesTab:CreateSection("Raycasting Vision Module")
+
+local RaycastingInfo = ModulesTab:CreateParagraph({
+   Title = "Obstacle and Hazard Detection",
+   Content = "Adds forward scans, 360 scanning, cliff checks, hazards, and line-of-sight tools. Pathfinding uses it automatically when both modules are loaded."
+})
+
+local EnableRaycastingToggle = ModulesTab:CreateToggle({
+   Name = "Enable Raycasting Module",
+   CurrentValue = false,
+   Flag = "RaycastingEnabled",
+   Callback = function(value)
+      Config.RaycastingEnabled = value
+
+      if value then
+         spawn(function()
+            if not LoadedModules.Raycasting then
+               Rayfield:Notify({
+                  Title = "Loading Module",
+                  Content = "Downloading raycasting module from GitHub...",
+                  Duration = 3,
+                  Image = 4483362458
+               })
+
+               local module = LoadModule("Raycasting")
+
+               if module then
+                  LoadedModules.Raycasting = module
+
+                  if LoadedModules.Pathfinding and type(LoadedModules.Pathfinding.SetRaycastingModule) == "function" then
+                     LoadedModules.Pathfinding.SetRaycastingModule(module)
+                  end
+
+                  Rayfield:Notify({
+                     Title = "Raycasting Loaded",
+                     Content = "Raycasting vision module ready.",
+                     Duration = 4,
+                     Image = 4483362458
+                  })
+               else
+                  Config.RaycastingEnabled = false
+                  Rayfield:Notify({
+                     Title = "Load Failed",
+                     Content = "Could not load raycasting module",
+                     Duration = 4,
+                     Image = 4483362458
+                  })
+               end
+            end
+         end)
+      else
+         if LoadedModules.Pathfinding and type(LoadedModules.Pathfinding.SetRaycastingModule) == "function" then
+            LoadedModules.Pathfinding.SetRaycastingModule(nil)
+         end
+
+         UnloadModule("Raycasting")
+         Rayfield:Notify({
+            Title = "Module Unloaded",
+            Content = "Raycasting module disabled",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local RaycastingTestSection = ModulesTab:CreateSection("Test Raycasting")
+
+local RaycastingStatusLabel = ModulesTab:CreateLabel("Raycasting: Not loaded")
+
+local ScanForwardButton = ModulesTab:CreateButton({
+   Name = "Scan Forward",
+   Callback = function()
+      if not Config.RaycastingEnabled or not LoadedModules.Raycasting then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Raycasting module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+
+      local result = LoadedModules.Raycasting.ScanForward(30, 7)
+      local obstacleCount = result and result.obstacleCount or 0
+      RaycastingStatusLabel:Set("Forward scan: " .. tostring(obstacleCount) .. " obstacles")
+      print("[Raycasting] Forward scan obstacles:", obstacleCount)
+   end
+})
+
+local ScanAroundButton = ModulesTab:CreateButton({
+   Name = "360 Scan",
+   Callback = function()
+      if not Config.RaycastingEnabled or not LoadedModules.Raycasting then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Raycasting module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+
+      local result = LoadedModules.Raycasting.ScanCircular(25, 32)
+      local safeCount = result and result.safeDirections and #result.safeDirections or 0
+      RaycastingStatusLabel:Set("360 scan: " .. tostring(safeCount) .. " safe directions")
+      print("[Raycasting] 360 scan safe directions:", safeCount)
+   end
+})
+
+local DetectCliffButton = ModulesTab:CreateButton({
+   Name = "Detect Cliff Ahead",
+   Callback = function()
+      if not Config.RaycastingEnabled or not LoadedModules.Raycasting then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Raycasting module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+
+      local hasCliff, info = LoadedModules.Raycasting.DetectCliff(10)
+      RaycastingStatusLabel:Set(hasCliff and "Cliff detected ahead" or "No cliff ahead")
+      print("[Raycasting] Cliff ahead:", hasCliff, info)
+   end
+})
+
+local RaycastingVisualizationToggle = ModulesTab:CreateToggle({
+   Name = "Show Ray Visuals",
+   CurrentValue = false,
+   Flag = "RaycastingVisualization",
+   Callback = function(value)
+      if not Config.RaycastingEnabled or not LoadedModules.Raycasting then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Raycasting module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+
+      if value then
+         LoadedModules.Raycasting.EnableVisualization(true, true, true)
+         RaycastingStatusLabel:Set("Visualization enabled")
+      else
+         LoadedModules.Raycasting.DisableVisualization()
+         RaycastingStatusLabel:Set("Visualization disabled")
+      end
+   end
+})
+
+]==]
+
+source = source:gsub(
+	'%-%- ========================================%s*\n%-%- PATHFINDING MODULE%s*\n%-%- ========================================',
+	function()
+		return raycastingModuleBlock .. "-- ========================================\n-- PATHFINDING MODULE\n-- ========================================"
+	end,
+	1
+)
+
+source = source:gsub(
+	'LoadedModules%.Pathfinding = module%s*\n%s*Rayfield:Notify%({',
+	function()
+		return 'LoadedModules.Pathfinding = module\n                  if LoadedModules.Raycasting and type(module.SetRaycastingModule) == "function" then\n                     module.SetRaycastingModule(LoadedModules.Raycasting)\n                  end\n                  Rayfield:Notify({'
 	end,
 	1
 )
