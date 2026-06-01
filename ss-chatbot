@@ -44,7 +44,7 @@ local function patchNumericLoadstringChunks()
 					local message = tostring(result)
 					if message:find("attempt to call a nil value", 1, true) then
 						warn("[SS Chatbot] skipped bad numeric asset chunk:", chunkName)
-						return nil
+						return function() return nil end
 					end
 
 					error(message, 0)
@@ -316,7 +316,7 @@ local AvailableModels = {
 
 source = source:gsub('Model = "mistralai/devstral%-2512:free",', 'Model = "' .. freeModels[1] .. '",', 1)
 source = source:gsub(
-	'%-%- Model%-Specific API Keys%s*local ModelApiKeys = {%s*%["mistralai/devstral%-2512:free"%] = "[^"]+",%s*%["xiaomi/mimo%-v2%-flash:free"%] = "[^"]+",%s*%["tngtech/deepseek%-r1t2%-chimera:free"%] = "[^"]+"%s*}',
+	'%-%- Model%-Specific API Keys%s*local ModelApiKeys = {%s*%["mistralai/devstral%-2512:free"%] = "[^"]+",%s*%["xiaomi/mimo%-v2%-flash:free"%] = "[^"]+",%s*%["tngtech/deepseek%-r1t2%-chimera:free"[...]
 	modelKeyBlock,
 	1
 )
