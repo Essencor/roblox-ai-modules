@@ -41,6 +41,27 @@ local Config = {
     MaxRaysPerFrame = 35,          -- Increased from 20
     UpdateInterval = 0.15,         -- Reduced from 0.2 for faster updates
     
+    -- Background dome mapping
+    DomeMappingEnabled = true,
+    DomeScanRadius = 70,
+    DomeHorizontalSteps = 36,
+    DomeVerticalSteps = 9,
+    DomePitchMin = -75,
+    DomePitchMax = 80,
+    DomeRaysPerStep = 5,
+    DomeStepWait = 0.03,
+    DomeMapCellSize = 6,
+    DomeMapEntryTTL = 25,
+    DomeMapMaxEntries = 900,
+
+    -- Reflection mapping
+    ReflectionMappingEnabled = true,
+    ReflectionBounceCount = 2,
+    ReflectionDistance = 45,
+    ReflectionEveryNRays = 2,
+    ReflectionSurfaceOffset = 0.08,
+    ReflectionColor = Color3.new(1, 0.85, 0),
+
     -- Detection
     ObstacleMinSize = 1,
     CliffMinHeight = 4,
@@ -64,7 +85,15 @@ local State = {
     detectedObstacles = {},
     safeDirections = {},
     terrainProfile = {},
-    visualizations = {}
+    visualizations = {},
+    domeMap = {},
+    domeMapOrder = {},
+    reflectionEdges = {},
+    mappingActive = false,
+    mappingGeneration = 0,
+    domeRayIndex = 0,
+    lastDomeSweep = 0,
+    lastDomeSummary = nil
 }
 
 -- Statistics
@@ -73,7 +102,11 @@ local Stats = {
     cachedHits = 0,
     obstaclesDetected = 0,
     cliffsDetected = 0,
-    hazardsDetected = 0
+    hazardsDetected = 0,
+    domeSweeps = 0,
+    domeHits = 0,
+    reflectionHits = 0,
+    reflectionRays = 0
 }
 
 -- ===================================
@@ -209,6 +242,315 @@ local function PerformRaycast(origin, direction, distance, useCache)
     end
     
     return result
+end
+
+-- ===================================
+-- BACKGROUND DOME + REFLECTION MAPPING
+-- ===================================
+
+local function ClampNumber(value, minValue, maxValue)
+    if value < minValue then return minValue end
+    if value > maxValue then return maxValue end
+    return value
+end
+
+local function GetMapCellKey(position)
+    local cellSize = math.max(1, Config.DomeMapCellSize)
+    return tostring(math.floor(position.X / cellSize)) .. "," ..
+           tostring(math.floor(position.Y / cellSize)) .. "," ..
+           tostring(math.floor(position.Z / cellSize))
+end
+
+local function PruneDomeMap()
+    local now = tick()
+    local newOrder = {}
+    local count = 0
+
+    for _, key in ipairs(State.domeMapOrder) do
+        local entry = State.domeMap[key]
+        if entry and (now - entry.lastSeen) <= Config.DomeMapEntryTTL then
+            table.insert(newOrder, key)
+            count = count + 1
+        else
+            State.domeMap[key] = nil
+        end
+    end
+
+    State.domeMapOrder = newOrder
+
+    while count > Config.DomeMapMaxEntries and #State.domeMapOrder > 0 do
+        local oldestKey = table.remove(State.domeMapOrder, 1)
+        if State.domeMap[oldestKey] then
+            State.domeMap[oldestKey] = nil
+            count = count - 1
+        end
+    end
+end
+
+local function StoreDomeHit(origin, direction, result, kind, bounceIndex, sourceKey)
+    if not result then return nil end
+
+    local key = GetMapCellKey(result.Position)
+    local now = tick()
+    local entry = State.domeMap[key]
+
+    if not entry then
+        entry = {
+            key = key,
+            position = result.Position,
+            normal = result.Normal,
+            instance = result.Instance,
+            material = result.Material,
+            distance = (result.Position - origin).Magnitude,
+            firstSeen = now,
+            lastSeen = now,
+            hits = 0,
+            kind = kind,
+            bounce = bounceIndex or 0,
+            sourceKey = sourceKey
+        }
+        State.domeMap[key] = entry
+        table.insert(State.domeMapOrder, key)
+    else
+        entry.position = result.Position
+        entry.normal = result.Normal
+        entry.instance = result.Instance
+        entry.material = result.Material
+        entry.distance = (result.Position - origin).Magnitude
+        entry.lastSeen = now
+        entry.kind = kind
+        entry.bounce = bounceIndex or entry.bounce or 0
+        entry.sourceKey = sourceKey or entry.sourceKey
+    end
+
+    entry.hits = entry.hits + 1
+
+    if sourceKey then
+        table.insert(State.reflectionEdges, {
+            from = sourceKey,
+            to = key,
+            bounce = bounceIndex or 1,
+            time = now
+        })
+
+        if #State.reflectionEdges > Config.DomeMapMaxEntries then
+            table.remove(State.reflectionEdges, 1)
+        end
+    end
+
+    return key, entry
+end
+
+local function GetDomeDirection(rayIndex)
+    local horizontalSteps = math.max(4, Config.DomeHorizontalSteps)
+    local verticalSteps = math.max(2, Config.DomeVerticalSteps)
+    local totalSteps = horizontalSteps * verticalSteps
+    local index = rayIndex % totalSteps
+    local yawIndex = index % horizontalSteps
+    local pitchIndex = math.floor(index / horizontalSteps)
+
+    local yaw = (math.pi * 2 / horizontalSteps) * yawIndex
+    local pitchAlpha = verticalSteps == 1 and 0.5 or (pitchIndex / (verticalSteps - 1))
+    local pitchMin = math.rad(Config.DomePitchMin)
+    local pitchMax = math.rad(Config.DomePitchMax)
+    local pitch = pitchMin + ((pitchMax - pitchMin) * pitchAlpha)
+    local horizontal = math.cos(pitch)
+
+    return Vector3.new(math.cos(yaw) * horizontal, math.sin(pitch), math.sin(yaw) * horizontal).Unit
+end
+
+local function ReflectDirection(direction, normal)
+    local reflected = direction - (2 * direction:Dot(normal) * normal)
+    if reflected.Magnitude < 0.001 then
+        return nil
+    end
+    return reflected.Unit
+end
+
+local function TraceDomeRay(origin, direction, shouldReflect)
+    local castsUsed = 1
+    local result = PerformRaycast(origin, direction, Config.DomeScanRadius, false)
+    local sourceKey = StoreDomeHit(origin, direction, result, "primary", 0, nil)
+
+    VisualizeRay(origin, direction, Config.DomeScanRadius, result, Config.RayColor)
+
+    if result then
+        Stats.domeHits = Stats.domeHits + 1
+    end
+
+    if not result or not shouldReflect or not Config.ReflectionMappingEnabled then
+        return castsUsed
+    end
+
+    local bounceOrigin = result.Position + (result.Normal * Config.ReflectionSurfaceOffset)
+    local bounceDirection = ReflectDirection(direction, result.Normal)
+
+    for bounce = 1, Config.ReflectionBounceCount do
+        if not bounceDirection then
+            break
+        end
+
+        castsUsed = castsUsed + 1
+        Stats.reflectionRays = Stats.reflectionRays + 1
+
+        local bounceResult = PerformRaycast(bounceOrigin, bounceDirection, Config.ReflectionDistance, false)
+        VisualizeRay(bounceOrigin, bounceDirection, Config.ReflectionDistance, bounceResult, Config.ReflectionColor)
+
+        local nextKey = StoreDomeHit(bounceOrigin, bounceDirection, bounceResult, "reflection", bounce, sourceKey)
+        if bounceResult then
+            Stats.reflectionHits = Stats.reflectionHits + 1
+        end
+
+        if not bounceResult then
+            break
+        end
+
+        sourceKey = nextKey or sourceKey
+        bounceOrigin = bounceResult.Position + (bounceResult.Normal * Config.ReflectionSurfaceOffset)
+        bounceDirection = ReflectDirection(bounceDirection, bounceResult.Normal)
+    end
+
+    return castsUsed
+end
+
+local function ApplyDomeOptions(options)
+    if not options then return end
+
+    local optionMap = {
+        radius = "DomeScanRadius",
+        horizontalSteps = "DomeHorizontalSteps",
+        verticalSteps = "DomeVerticalSteps",
+        pitchMin = "DomePitchMin",
+        pitchMax = "DomePitchMax",
+        raysPerStep = "DomeRaysPerStep",
+        stepWait = "DomeStepWait",
+        reflectionBounces = "ReflectionBounceCount",
+        reflectionDistance = "ReflectionDistance",
+        reflectionEvery = "ReflectionEveryNRays",
+        enabled = "DomeMappingEnabled"
+    }
+
+    for key, value in pairs(options) do
+        local configKey = optionMap[key] or key
+        if Config[configKey] ~= nil then
+            Config[configKey] = value
+        end
+    end
+end
+
+function RaycastingVision.StepDomeMapping(rayBudget)
+    if not Config.DomeMappingEnabled then
+        return nil
+    end
+
+    local rootPart = GetRootPart()
+    if not rootPart then
+        return nil
+    end
+
+    rayBudget = rayBudget or Config.DomeRaysPerStep
+    rayBudget = ClampNumber(math.floor(rayBudget), 1, Config.MaxRaysPerFrame)
+
+    local origin = rootPart.Position + Vector3.new(0, 2, 0)
+    local horizontalSteps = math.max(4, Config.DomeHorizontalSteps)
+    local verticalSteps = math.max(2, Config.DomeVerticalSteps)
+    local totalSteps = horizontalSteps * verticalSteps
+    local castsUsed = 0
+    local primaryRays = 0
+    local startedAt = State.domeRayIndex
+
+    while castsUsed < rayBudget do
+        local direction = GetDomeDirection(State.domeRayIndex)
+        local shouldReflect = Config.ReflectionEveryNRays <= 1 or (State.domeRayIndex % Config.ReflectionEveryNRays == 0)
+        castsUsed = castsUsed + TraceDomeRay(origin, direction, shouldReflect)
+        primaryRays = primaryRays + 1
+        State.domeRayIndex = (State.domeRayIndex + 1) % totalSteps
+
+        if State.domeRayIndex == 0 and startedAt ~= 0 then
+            Stats.domeSweeps = Stats.domeSweeps + 1
+            State.lastDomeSweep = tick()
+            break
+        end
+    end
+
+    PruneDomeMap()
+
+    State.lastDomeSummary = {
+        primaryRays = primaryRays,
+        raycasts = castsUsed,
+        mappedCells = #State.domeMapOrder,
+        reflectionEdges = #State.reflectionEdges,
+        nextIndex = State.domeRayIndex,
+        time = tick()
+    }
+
+    return State.lastDomeSummary
+end
+
+function RaycastingVision.StartDomeMapping(options)
+    ApplyDomeOptions(options)
+
+    if State.mappingActive then
+        return true
+    end
+
+    State.mappingActive = true
+    State.mappingGeneration = State.mappingGeneration + 1
+    local generation = State.mappingGeneration
+
+    task.spawn(function()
+        while State.mappingActive and State.mappingGeneration == generation do
+            local ok, err = pcall(function()
+                RaycastingVision.StepDomeMapping(Config.DomeRaysPerStep)
+            end)
+
+            if not ok then
+                Log("Dome mapping step failed: " .. tostring(err), "WARN")
+            end
+
+            task.wait(Config.DomeStepWait)
+        end
+    end)
+
+    Log("Background dome mapping started")
+    return true
+end
+
+function RaycastingVision.StopDomeMapping()
+    State.mappingActive = false
+    State.mappingGeneration = State.mappingGeneration + 1
+    Log("Background dome mapping stopped")
+end
+
+function RaycastingVision.IsDomeMappingActive()
+    return State.mappingActive
+end
+
+function RaycastingVision.ClearDomeMap()
+    State.domeMap = {}
+    State.domeMapOrder = {}
+    State.reflectionEdges = {}
+    State.lastDomeSummary = nil
+    Log("Dome map cleared")
+end
+
+function RaycastingVision.GetDomeMap()
+    return State.domeMap
+end
+
+function RaycastingVision.GetReflectionEdges()
+    return State.reflectionEdges
+end
+
+function RaycastingVision.GetDomeSummary()
+    return State.lastDomeSummary or {
+        primaryRays = 0,
+        raycasts = 0,
+        mappedCells = #State.domeMapOrder,
+        reflectionEdges = #State.reflectionEdges,
+        nextIndex = State.domeRayIndex,
+        time = tick()
+    }
 end
 
 -- ===================================
@@ -813,7 +1155,14 @@ function RaycastingVision.GetStatistics()
         cacheEfficiency = Stats.totalRaycasts > 0 and (Stats.cachedHits / Stats.totalRaycasts * 100) or 0,
         obstaclesDetected = Stats.obstaclesDetected,
         cliffsDetected = Stats.cliffsDetected,
-        hazardsDetected = Stats.hazardsDetected
+        hazardsDetected = Stats.hazardsDetected,
+        domeMappingActive = State.mappingActive,
+        domeSweeps = Stats.domeSweeps,
+        domeHits = Stats.domeHits,
+        domeMapCells = #State.domeMapOrder,
+        reflectionRays = Stats.reflectionRays,
+        reflectionHits = Stats.reflectionHits,
+        reflectionEdges = #State.reflectionEdges
     }
 end
 

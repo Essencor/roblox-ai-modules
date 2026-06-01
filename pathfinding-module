@@ -64,6 +64,12 @@ local Config = {
     SafetyCheckInterval = 0.5,
     MaxJumpableGapLength = 6,  -- Maximum gap length (in studs) character can jump over
     TerrainScanDistance = 10,  -- How far ahead to scan terrain (in studs)
+    UseBackgroundDomeMapping = true,
+    DomeMappingRadius = 70,
+    DomeMappingRaysPerStep = 5,
+    DomeMappingStepWait = 0.03,
+    DomeMappingReflectionBounces = 2,
+    MoveToRefreshInterval = 0.15,
 }
 
 -- State
@@ -103,7 +109,8 @@ local Stats = {
     waypointsSkipped = 0,
     raycastingUsed = 0,
     cliffsAvoided = 0,
-    visionRecoveries = 0
+    visionRecoveries = 0,
+    domeMappingStarts = 0
 }
 
 -- ===================================
@@ -153,11 +160,22 @@ end
 -- RAYCASTING INTEGRATION
 -- ===================================
 
+local StartRaycastMapping
+
 function PathfindingModule.SetRaycastingModule(raycastModule)
+    if RaycastingVision and RaycastingVision ~= raycastModule and RaycastingVision.StopDomeMapping then
+        pcall(function()
+            RaycastingVision.StopDomeMapping()
+        end)
+    end
+
     RaycastingVision = raycastModule
     if RaycastingVision then
         Log("Raycasting vision module connected!", "INFO")
         Log("Vision-powered pathfinding enabled", "INFO")
+        if StartRaycastMapping then
+            StartRaycastMapping()
+        end
     else
         Log("Raycasting module disconnected", "WARN")
     end
@@ -165,6 +183,34 @@ end
 
 local function HasRaycasting()
     return RaycastingVision ~= nil and Config.UseRaycastingVision
+end
+
+StartRaycastMapping = function()
+    if not HasRaycasting() or not Config.UseBackgroundDomeMapping then
+        return false
+    end
+
+    if type(RaycastingVision.StartDomeMapping) ~= "function" then
+        return false
+    end
+
+    local ok, err = pcall(function()
+        RaycastingVision.StartDomeMapping({
+            radius = Config.DomeMappingRadius,
+            raysPerStep = Config.DomeMappingRaysPerStep,
+            stepWait = Config.DomeMappingStepWait,
+            reflectionBounces = Config.DomeMappingReflectionBounces
+        })
+    end)
+
+    if ok then
+        Stats.domeMappingStarts = Stats.domeMappingStarts + 1
+        Log("Background dome raycast mapping active", "INFO")
+        return true
+    end
+
+    Log("Failed to start dome mapping: " .. tostring(err), "WARN")
+    return false
 end
 
 local function PerformPreNavigationScan(targetPos)
@@ -1011,6 +1057,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     local waypointPos = waypoint.Position
     local isFinalWaypoint = (waypointIndex == totalWaypoints)
     local reachedDistance = isFinalWaypoint and Config.FinalWaypointDistance or Config.WaypointReachedDistance
+    local jumpExecuted = false
     
     if isFinalWaypoint then
         Log("Moving to FINAL waypoint " .. waypointIndex .. "/" .. totalWaypoints .. " (lenient: " .. reachedDistance .. " studs)", "INFO")
@@ -1051,7 +1098,6 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     local reached = false
     local checkInterval = 0
     local lastJumpCheck = 0
-    local jumpExecuted = false
     local closestDistance = math.huge
     local lastMoveToTime = tick()
     local lastScanTime = 0  -- Throttle scanning
@@ -1065,8 +1111,11 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
         local currentPos = rootPart.Position
         local distance = GetDistance(currentPos, waypointPos)
         
-        -- CONSTANTLY re-issue MoveTo for ultra-smooth movement
-        humanoid:MoveTo(waypointPos)
+        -- Re-issue MoveTo at a steady cadence instead of every frame.
+        if tick() - lastMoveToTime >= Config.MoveToRefreshInterval then
+            humanoid:MoveTo(waypointPos)
+            lastMoveToTime = tick()
+        end
         
         -- Track closest distance
         if distance < closestDistance then
@@ -1284,6 +1333,7 @@ function PathfindingModule.Navigate(target, mode)
     
     if HasRaycasting() then
         Log("👁️  Raycasting vision: ACTIVE", "INFO")
+        StartRaycastMapping()
     else
         Log("⚠️  Raycasting vision: DISABLED", "WARN")
     end
@@ -1436,6 +1486,7 @@ function PathfindingModule.GetStatus()
         deathZones = #State.deathZones,
         rerouteAttempts = State.rerouteAttempts,
         raycastingEnabled = HasRaycasting(),
+        domeMappingActive = HasRaycasting() and type(RaycastingVision.IsDomeMappingActive) == "function" and RaycastingVision.IsDomeMappingActive() or false,
         stats = Stats
     }
 end
@@ -1446,6 +1497,7 @@ function PathfindingModule.GetDetailedStatus()
         raycastingVision = HasRaycasting(),
         preNavigationScan = Config.PreNavigationScan,
         continuousScanning = Config.ContinuousScanning,
+        backgroundDomeMapping = Config.UseBackgroundDomeMapping,
         cliffAvoidance = Config.CliffAvoidance,
         visionGuidedRecovery = Config.VisionGuidedRecovery,
         smartPathing = Config.UseSmartPathing,
@@ -1491,7 +1543,8 @@ function PathfindingModule.ExportStatistics()
         waypointsSkipped = Stats.waypointsSkipped,
         raycastingUsed = Stats.raycastingUsed,
         cliffsAvoided = Stats.cliffsAvoided,
-        visionRecoveries = Stats.visionRecoveries
+        visionRecoveries = Stats.visionRecoveries,
+        domeMappingStarts = Stats.domeMappingStarts
     }
 end
 
