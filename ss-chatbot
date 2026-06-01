@@ -170,7 +170,7 @@ source = source:gsub(
          local okRun, value = pcall(loader)
          if not okRun then
             local message = tostring(value)
-            if message:find("attempt to call a nil value", 1, true) or message:match('%[string "%d+"%]') then
+            if message:find("attempt to call a nil value", 1, true) or message:find('[string "', 1, true) then
                warn("[SS Chatbot] Rayfield skipped numeric loadWithTimeout chunk:", message)
                return nil
             end
@@ -196,7 +196,7 @@ source = source:gsub(
             local okRun, value = pcall(loader)
             if not okRun then
                local message = tostring(value)
-               if message:find("attempt to call a nil value", 1, true) or message:match('%[string "%d+"%]') then
+               if message:find("attempt to call a nil value", 1, true) or message:find('[string "', 1, true) then
                   warn("[SS Chatbot] Rayfield skipped numeric reporter chunk:", message)
                   return nil
                end
@@ -240,7 +240,7 @@ source = source:gsub(
    local ok, result = pcall(chunk)
    if not ok then
       local message = tostring(result)
-      if message:find("attempt to call a nil value", 1, true) or message:match('%[string "%d+"%]') then
+      if message:find("attempt to call a nil value", 1, true) or message:find('[string "', 1, true) then
          warn(string.format("[AI Chatbot] %s skipped bad numeric/runtime chunk: %s", label, message))
          return {}
       end
