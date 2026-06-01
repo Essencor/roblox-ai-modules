@@ -1,4 +1,4 @@
--- SS Chatbot public loader v40
+﻿-- SS Chatbot public loader v40
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
 print("[SS Chatbot] loader v40 started")
@@ -186,6 +186,28 @@ source = source:gsub(
 
                   print("Sending greeting:", greeting)
                   SendChatMessage(greeting)]]
+	end,
+	1
+)
+
+source = source:gsub(
+	'local loadSuccess, module = pcall%(loadstring%(response%)%)',
+	function()
+		return [[local loader, compileErr = loadstring(response)
+
+   if not loader then
+      warn("LoadModule - Compile failed:", tostring(compileErr))
+      print("====================================")
+      return nil
+   end
+
+   local loadSuccess, module = pcall(loader)
+
+   if not loadSuccess then
+      warn("LoadModule - Runtime failed:", tostring(module))
+      print("====================================")
+      return nil
+   end]]
 	end,
 	1
 )
