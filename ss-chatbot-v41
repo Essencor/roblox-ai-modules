@@ -1,0 +1,51 @@
+-- SS Chatbot v41 bootstrap
+-- Disables the expired bundled OpenRouter key and keeps API key errors readable.
+
+local LOADER_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/main/ss-chatbot?fresh=v40-20260601-0205"
+
+local okFetch, loaderSource = pcall(function()
+	return game:HttpGet(LOADER_URL, true)
+end)
+
+if not okFetch then
+	error("[SS Chatbot] bootstrap HttpGet failed: " .. tostring(loaderSource))
+end
+
+if type(loaderSource) ~= "string" or loaderSource == "" then
+	error("[SS Chatbot] bootstrap got empty loader source")
+end
+
+loaderSource = loaderSource:gsub(
+	'local DEFAULT_OPENROUTER_KEY = "sk%-or%-v1%-3ca85b5c5b42343dad6573c1584e4b03451460bbdb406278a9eba474a43845a2"',
+	'local DEFAULT_OPENROUTER_KEY = ""',
+	1
+)
+
+loaderSource = loaderSource:gsub(
+	'source = source:gsub%(%s*\'local apiKeyToUse = ModelApiKeys%%%[Config%%%.Model%%%] or Config%%%.ApiKey\',%s*function%(%)%s*return \'local apiKeyToUse = %(Config%.ApiKey ~= "" and Config%.ApiKey ~= nil%) and Config%.ApiKey or ModelApiKeys%[Config%.Model%]\'%s*end,%s*1%s*%)',
+	function()
+		return [[source = source:gsub(
+	'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
+	function()
+		return 'local apiKeyToUse = (Config.ApiKey ~= nil and Config.ApiKey ~= "") and Config.ApiKey or (ModelApiKeys[Config.Model] or "")'
+	end,
+	1
+)
+
+source = source:gsub(
+	'print%("GetAIResponse %- API Key %(first 20 chars%):", apiKeyToUse:sub%(1, 20%)%)',
+	function()
+		return 'print("GetAIResponse - API Key (first 20 chars):", apiKeyToUse ~= "" and apiKeyToUse:sub(1, 20) or "<not set>")'
+	end,
+	1
+)]]
+	end,
+	1
+)
+
+local chunk, compileErr = loadstring(loaderSource)
+if not chunk then
+	error("[SS Chatbot] bootstrap compile failed: " .. tostring(compileErr))
+end
+
+return chunk()
