@@ -40,7 +40,7 @@ local Config = {
     WaypointReachedDistance = 3,  -- Strict - must be close
     FinalWaypointDistance = 4,    -- Final destination must be accurate
     ShowPath = false,
-    ShowWaypoints = true,
+    ShowWaypoints = false,
     PathColor = Color3.new(0, 1, 0),
     WaypointColor = Color3.new(1, 1, 0),
     ShowDestinationMarker = true,
@@ -78,6 +78,7 @@ local State = {
     stuckCount = 0,
     visualizations = {},
     destinationMarker = nil,
+    navigationId = 0,
     deathZones = {},
     positionHistory = {},
     lastVelocity = Vector3.new(0, 0, 0),
@@ -998,7 +999,11 @@ local function CanSkipToWaypoint(currentPos, targetWaypoint, intermediateWaypoin
     return false
 end
 
-local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
+local function IsActiveNavigation(navigationId)
+    return State.isNavigating and State.navigationId == navigationId
+end
+
+local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigationId)
     local humanoid = GetHumanoid()
     local rootPart = GetRootPart()
     if not humanoid or not rootPart then return false end
@@ -1053,7 +1058,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints)
     local lastProgressLog = 0
     
     while tick() - startTime < timeout do
-        if not State.isNavigating then
+        if not IsActiveNavigation(navigationId) then
             return false
         end
         
@@ -1164,7 +1169,7 @@ local function AttemptReroute(currentPos, targetPos)
     return nil
 end
 
-local function FollowPath(pathData)
+local function FollowPath(pathData, navigationId)
     if not pathData or not pathData.waypoints then
         Log("Invalid path data", "ERROR")
         return false
@@ -1177,16 +1182,21 @@ local function FollowPath(pathData)
     Log("Following path with " .. #waypoints .. " waypoints")
     
     for i, waypoint in ipairs(waypoints) do
-        if not State.isNavigating then
+        if not IsActiveNavigation(navigationId) then
             Log("Navigation cancelled", "WARN")
             return false
         end
         
         State.currentWaypointIndex = i
         
-        local success = MoveToWaypoint(waypoint, i, #waypoints)
+        local success = MoveToWaypoint(waypoint, i, #waypoints, navigationId)
         
         if not success then
+            if not IsActiveNavigation(navigationId) then
+                Log("Navigation cancelled", "WARN")
+                return false
+            end
+
             -- Failed at this waypoint
             if i < #waypoints - 1 then
                 -- Not at final waypoints yet, try rerouting
@@ -1196,7 +1206,7 @@ local function FollowPath(pathData)
                 if rootPart then
                     local newPath = AttemptReroute(rootPart.Position, State.targetPosition)
                     if newPath then
-                        return FollowPath(newPath)
+                        return FollowPath(newPath, navigationId)
                     end
                 end
                 
@@ -1222,6 +1232,8 @@ end
 
 function PathfindingModule.Navigate(target, mode)
     PathfindingModule.Stop()
+    State.navigationId = State.navigationId + 1
+    local navigationId = State.navigationId
     
     State.stuckCount = 0
     State.lastMoveTime = tick()
@@ -1265,6 +1277,7 @@ function PathfindingModule.Navigate(target, mode)
     State.isNavigating = true
     State.targetPosition = endPos
     State.startTime = tick()
+    local navigationStartTime = State.startTime
     Stats.totalPaths = Stats.totalPaths + 1
     
     Log("🚀 Starting navigation, distance: " .. math.floor(distance) .. " studs", "INFO")
@@ -1278,6 +1291,9 @@ function PathfindingModule.Navigate(target, mode)
     -- Pre-navigation scan
     local safeToNavigate, reason = PerformPreNavigationScan(endPos)
     if not safeToNavigate then
+        if not IsActiveNavigation(navigationId) then
+            return false
+        end
         Log("❌ Pre-navigation scan blocked path: " .. tostring(reason), "ERROR")
         State.isNavigating = false
         Stats.failedPaths = Stats.failedPaths + 1
@@ -1291,9 +1307,16 @@ function PathfindingModule.Navigate(target, mode)
     local success = false
     
     for attempt = 1, maxAttempts do
+        if not IsActiveNavigation(navigationId) then
+            return false
+        end
+
         if attempt > 1 then
             Log("🔄 Retry attempt " .. attempt .. "/" .. maxAttempts, "WARN")
             task.wait(1)
+            if not IsActiveNavigation(navigationId) then
+                return false
+            end
         end
         
         Log("📊 Computing path (attempt " .. attempt .. ")...", "INFO")
@@ -1302,7 +1325,7 @@ function PathfindingModule.Navigate(target, mode)
         if pathData then
             Log("✅ Path computed successfully!", "INFO")
             State.currentPath = pathData
-            success = FollowPath(pathData)
+            success = FollowPath(pathData, navigationId)
             
             if success then
                 Log("🎉 Path completed!", "INFO")
@@ -1320,7 +1343,7 @@ function PathfindingModule.Navigate(target, mode)
                 if pathData then
                     Log("✅ Path found (ignoring death zones)", "INFO")
                     State.currentPath = pathData
-                    success = FollowPath(pathData)
+                    success = FollowPath(pathData, navigationId)
                     if success then
                         Log("🎉 Navigation succeeded!", "INFO")
                         break
@@ -1330,7 +1353,11 @@ function PathfindingModule.Navigate(target, mode)
         end
     end
     
-    local duration = tick() - State.startTime
+    if not IsActiveNavigation(navigationId) then
+        return false
+    end
+
+    local duration = tick() - navigationStartTime
     State.isNavigating = false
     
     -- VERIFY we actually reached the destination, not just completed waypoints
@@ -1363,7 +1390,11 @@ function PathfindingModule.Navigate(target, mode)
         Log("  - Death zones blocking path", "INFO")
     end
     
+    State.currentPath = nil
+    State.currentWaypointIndex = 0
+    State.targetPosition = nil
     ClearDestinationMarker()
+    ClearVisualizations()
 
     return success
 end
@@ -1373,6 +1404,8 @@ end
 -- ===================================
 
 function PathfindingModule.Stop()
+    State.navigationId = State.navigationId + 1
+
     if State.isNavigating then
         Log("Stopping navigation", "INFO")
         State.isNavigating = false
@@ -1385,6 +1418,9 @@ function PathfindingModule.Stop()
             end
         end
     end
+    State.currentPath = nil
+    State.currentWaypointIndex = 0
+    State.targetPosition = nil
     
     ClearDestinationMarker()
     ClearVisualizations()
