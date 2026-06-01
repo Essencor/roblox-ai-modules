@@ -38,7 +38,8 @@ local Config = {
     MaxStuckAttempts = 20,  -- Allow many recovery attempts (was 8)
     DeathRadius = 10,
     MaxDeathZones = 50,
-    WaypointReachedDistance = 1.25,  -- Must be practically touching
+    WaypointReachedDistance = 2.75,
+    FirstWaypointReachedDistance = 4,
     FinalWaypointDistance = 1.5,     -- Final destination must be accurate
     ShowPath = false,
     ShowWaypoints = false,
@@ -73,6 +74,7 @@ local Config = {
     MoveToRefreshInterval = 0.15,
     UseRaycastJumpAnalysis = true,
     JumpCheckInterval = 0.08,
+    MinJumpCheckDistance = 3,
     LadderAssist = true,
     LadderScanRadius = 60,
     LadderScanRays = 36,
@@ -1275,6 +1277,9 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     local waypointPos = waypoint.Position
     local isFinalWaypoint = (waypointIndex == totalWaypoints)
     local reachedDistance = isFinalWaypoint and Config.FinalWaypointDistance or Config.WaypointReachedDistance
+    if waypointIndex == 1 and not isFinalWaypoint then
+        reachedDistance = Config.FirstWaypointReachedDistance
+    end
     local jumpExecuted = false
 
     if isFinalWaypoint then
@@ -1301,7 +1306,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     end
 
     -- IMMEDIATE pre-check: Do we need to jump to reach this waypoint?
-    if Config.UseJumpOptimization then
+    if Config.UseJumpOptimization and GetDistance(rootPart.Position, waypointPos) >= Config.MinJumpCheckDistance then
         local needsJump, jumpType = CheckJumpRequired(rootPart.Position, waypointPos)
         if needsJump then
             Log("⚡ Pre-check: Jump needed immediately! Type: " .. tostring(jumpType))
@@ -1358,7 +1363,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
 
         -- Check if reached (STRICT)
         if distance <= reachedDistance then
-            if ConfirmWaypointArrival(waypointPos, reachedDistance, navigationId, isFinalWaypoint and 0.5 or 0.35) then
+            if ConfirmWaypointArrival(waypointPos, reachedDistance, navigationId, isFinalWaypoint and 0.5 or 0.12) then
                 reached = true
                 State.lastSuccessfulWaypoint = currentPos
 
@@ -1380,7 +1385,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
         end
 
         -- Continuous jump checking (execute in coroutine to not pause movement)
-        if Config.UseJumpOptimization and not jumpExecuted then
+        if Config.UseJumpOptimization and not jumpExecuted and distance >= Config.MinJumpCheckDistance then
             if tick() - lastJumpCheck >= Config.JumpCheckInterval then
                 local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
                 if needsJump then
