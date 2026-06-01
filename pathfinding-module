@@ -1307,11 +1307,18 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
 
     -- IMMEDIATE pre-check: Do we need to jump to reach this waypoint?
     if Config.UseJumpOptimization and GetDistance(rootPart.Position, waypointPos) >= Config.MinJumpCheckDistance then
-        local needsJump, jumpType = CheckJumpRequired(rootPart.Position, waypointPos)
-        if needsJump then
-            Log("⚡ Pre-check: Jump needed immediately! Type: " .. tostring(jumpType))
-            ExecuteJump(jumpType)
-            lastJumpTime = tick()
+        local preHState = humanoid:GetState()
+        local preGrounded = preHState == Enum.HumanoidStateType.Running
+            or preHState == Enum.HumanoidStateType.RunningNoPhysics
+            or preHState == Enum.HumanoidStateType.Landed
+            or preHState == Enum.HumanoidStateType.None
+        if preGrounded then
+            local needsJump, jumpType = CheckJumpRequired(rootPart.Position, waypointPos)
+            if needsJump then
+                Log("⚡ Pre-check: Jump needed immediately! Type: " .. tostring(jumpType))
+                ExecuteJump(jumpType)
+                lastJumpTime = tick()
+            end
         end
     end
 
@@ -1345,7 +1352,16 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
 
         if tick() - lastProgressTime >= 0.4 then
             humanoid:MoveTo(waypointPos)
-            humanoid.Jump = true
+            -- Only force-jump if grounded and cooldown has elapsed
+            local hState = humanoid:GetState()
+            local isGrounded = hState == Enum.HumanoidStateType.Running
+                or hState == Enum.HumanoidStateType.RunningNoPhysics
+                or hState == Enum.HumanoidStateType.Landed
+                or hState == Enum.HumanoidStateType.None
+            if isGrounded and tick() - lastJumpTime > 0.8 then
+                humanoid.Jump = true
+                lastJumpTime = tick()
+            end
             lastMoveToTime = tick()
             lastProgressTime = tick()
         end
@@ -1384,14 +1400,21 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             humanoid:ChangeState(Enum.HumanoidStateType.Running)
         end
 
-        -- Continuous jump checking (execute in coroutine to not pause movement)
+        -- Continuous jump checking — only when grounded and cooldown has elapsed
         if Config.UseJumpOptimization and distance >= Config.MinJumpCheckDistance then
             if tick() - lastJumpCheck >= Config.JumpCheckInterval then
-                local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
-                if needsJump and tick() - lastJumpTime > 0.4 then
-                    Log("⚡ Jump needed: " .. tostring(jumpType))
-                    ExecuteJump(jumpType)
-                    lastJumpTime = tick()
+                local hState2 = humanoid:GetState()
+                local grounded2 = hState2 == Enum.HumanoidStateType.Running
+                    or hState2 == Enum.HumanoidStateType.RunningNoPhysics
+                    or hState2 == Enum.HumanoidStateType.Landed
+                    or hState2 == Enum.HumanoidStateType.None
+                if grounded2 then
+                    local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
+                    if needsJump and tick() - lastJumpTime > 0.8 then
+                        Log("⚡ Jump needed: " .. tostring(jumpType))
+                        ExecuteJump(jumpType)
+                        lastJumpTime = tick()
+                    end
                 end
                 lastJumpCheck = tick()
             end
