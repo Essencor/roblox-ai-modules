@@ -17,20 +17,26 @@ local function patchNumericLoadstringChunks()
 	end
 
 	local originalLoadstring = loadstring
+	local function noop()
+		return nil
+	end
+
+	local function noopFactory()
+		return noop
+	end
+
 	local function guardedLoadstring(source, chunkName)
 		if type(source) == "string" and source:match("^%s*%d+%s*$") then
-			return function()
-				return nil
-			end
+			return noopFactory
 		end
 
 		local isNumericChunk = type(chunkName) == "string" and chunkName:match("^%d+$")
 		local chunk, compileErr = originalLoadstring(source, chunkName)
 		if not chunk then
 			if isNumericChunk then
-				return function()
+				return function(...)
 					warn("[SS Chatbot] skipped bad numeric asset chunk:", tostring(chunkName))
-					return nil
+					return noop
 				end
 			end
 
@@ -44,10 +50,14 @@ local function patchNumericLoadstringChunks()
 					local message = tostring(result)
 					if message:find("attempt to call a nil value", 1, true) then
 						warn("[SS Chatbot] skipped bad numeric asset chunk:", chunkName)
-						return function() return nil end
+						return noop
 					end
 
 					error(message, 0)
+				end
+
+				if result == nil or type(result) == "number" then
+					return noop
 				end
 
 				return result
@@ -316,7 +326,7 @@ local AvailableModels = {
 
 source = source:gsub('Model = "mistralai/devstral%-2512:free",', 'Model = "' .. freeModels[1] .. '",', 1)
 source = source:gsub(
-	'%-%- Model%-Specific API Keys%s*local ModelApiKeys = {%s*%["mistralai/devstral%-2512:free"%] = "[^"]+",%s*%["xiaomi/mimo%-v2%-flash:free"%] = "[^"]+",%s*%["tngtech/deepseek%-r1t2%-chimera:free"[...]
+	'%-%- Model%-Specific API Keys%s*local ModelApiKeys = {%s*.-%s*}',
 	modelKeyBlock,
 	1
 )
