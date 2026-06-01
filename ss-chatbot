@@ -4,7 +4,10 @@
 print("[SS Chatbot] loader v40 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
-local DEFAULT_OPENROUTER_KEY = "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"
+local runtimeGlobals = (getgenv and getgenv()) or _G
+local USER_OPENROUTER_KEY = runtimeGlobals.SS_CHATBOT_OPENROUTER_KEY
+local DEFAULT_OPENROUTER_KEY = (type(USER_OPENROUTER_KEY) == "string" and USER_OPENROUTER_KEY ~= "" and USER_OPENROUTER_KEY)
+	or "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"
 
 local function patchNumericLoadstringChunks()
 	if type(loadstring) ~= "function" then
@@ -156,7 +159,8 @@ source = source:gsub(
    local source = game:HttpGet(url, true)
 
    if label == "Rayfield" and type(source) == "string" then
-      source = source:gsub("return loadstring%(content%)%(%)", [==[
+      source = source:gsub("return loadstring%(content%)%(%)", function()
+         return [==[
          local loader, loadErr = loadstring(content)
          if not loader then
             warn("[SS Chatbot] Rayfield skipped bad loadWithTimeout chunk:", tostring(loadErr))
@@ -178,9 +182,11 @@ source = source:gsub(
             return nil
          end
 
-         return value]==], 1)
+         return value]==]
+      end, 1)
 
-      source = source:gsub("return %(loadstring%(fetchResult%) :: any%)%(%)", [==[
+      source = source:gsub("return %(loadstring%(fetchResult%) :: any%)%(%)", function()
+         return [==[
             local loader, loadErr = loadstring(fetchResult)
             if not loader then
                warn("[SS Chatbot] Rayfield skipped bad reporter chunk:", tostring(loadErr))
@@ -202,7 +208,8 @@ source = source:gsub(
                return nil
             end
 
-            return value]==], 1)
+            return value]==]
+      end, 1)
 
       source = source:gsub(
          "local prompt = useStudio and require%(script%.Parent%.prompt%) or loadWithTimeout%('https://raw%.githubusercontent%.com/SiriusSoftwareLtd/Sirius/refs/heads/request/prompt%.lua'%)",
