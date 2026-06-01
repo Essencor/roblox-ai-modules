@@ -79,6 +79,10 @@ local Config = {
     LadderApproachDistance = 2.8,
     LadderClimbTimeout = 7,
     LadderUseMinHeightGain = 4,
+    UseDirectFallback = true,
+    DirectFallbackTimeout = 18,
+    DirectFallbackReachDistance = 2.5,
+    DirectFallbackMaxDistance = 180,
 }
 
 -- State
@@ -122,7 +126,8 @@ local Stats = {
     domeMappingStarts = 0,
     raycastJumpDecisions = 0,
     laddersUsed = 0,
-    laddersDetected = 0
+    laddersDetected = 0,
+    directFallbacks = 0
 }
 
 -- ===================================
@@ -667,6 +672,7 @@ local function IsStuckAdvanced()
                 Log("Stuck: Abnormal humanoid state (" .. tostring(state) .. ")", "WARN")
                 return true, "state"
             end
+
         end
     end
 
@@ -1415,6 +1421,88 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     return reached
 end
 
+local function DirectMoveFallback(targetPos, navigationId, reason)
+    if not Config.UseDirectFallback then
+        return false
+    end
+
+    local humanoid = GetHumanoid()
+    local rootPart = GetRootPart()
+    if not humanoid or not rootPart then
+        return false
+    end
+
+    local startDistance = GetDistance(rootPart.Position, targetPos)
+    if startDistance > Config.DirectFallbackMaxDistance then
+        Log("Direct fallback skipped: target too far (" .. math.floor(startDistance) .. " studs)", "WARN")
+        return false
+    end
+
+    Stats.directFallbacks = Stats.directFallbacks + 1
+    Log("Direct movement fallback started" .. (reason and (": " .. tostring(reason)) or ""), "WARN")
+
+    local startTime = tick()
+    local lastMoveTo = 0
+    local lastJumpCheck = 0
+    local closestDistance = startDistance
+    local lastProgressDistance = startDistance
+    local lastProgressTime = tick()
+
+    while tick() - startTime < Config.DirectFallbackTimeout do
+        if not IsActiveNavigation(navigationId) then
+            return false
+        end
+
+        rootPart = GetRootPart()
+        humanoid = GetHumanoid()
+        if not rootPart or not humanoid then
+            return false
+        end
+
+        local currentPos = rootPart.Position
+        local distance = GetDistance(currentPos, targetPos)
+
+        if distance <= Config.DirectFallbackReachDistance then
+            Log("Direct fallback reached target (distance: " .. math.floor(distance * 10) / 10 .. " studs)", "INFO")
+            return true
+        end
+
+        if distance < closestDistance then
+            closestDistance = distance
+            State.lastMoveTime = tick()
+        end
+
+        if distance < lastProgressDistance - 0.15 then
+            lastProgressDistance = distance
+            lastProgressTime = tick()
+        end
+
+        if tick() - lastMoveTo >= Config.MoveToRefreshInterval then
+            humanoid:MoveTo(targetPos)
+            lastMoveTo = tick()
+        end
+
+        if Config.UseJumpOptimization and tick() - lastJumpCheck >= Config.JumpCheckInterval then
+            local needsJump, jumpType = CheckJumpRequired(currentPos, targetPos)
+            if needsJump then
+                ExecuteJump(jumpType or "normal")
+            end
+            lastJumpCheck = tick()
+        end
+
+        if tick() - lastProgressTime > 1.2 then
+            humanoid:MoveTo(targetPos)
+            humanoid.Jump = true
+            lastProgressTime = tick()
+        end
+
+        task.wait(0.03)
+    end
+
+    Log("Direct fallback timed out (closest: " .. math.floor(closestDistance) .. " studs)", "WARN")
+    return false
+end
+
 -- ===================================
 -- DYNAMIC PATH REROUTING
 -- ===================================
@@ -1497,7 +1585,9 @@ local function FollowPath(pathData, navigationId)
         task.wait(0.1)
     end
 
-    if rootPart and GetDistance(rootPart.Position, endPos) > Config.FinalWaypointDistance then
+    local rootPart = GetRootPart()
+    local endPos = State.targetPosition
+    if rootPart and endPos and GetDistance(rootPart.Position, endPos) > Config.FinalWaypointDistance then
         Log("❌ Path finished but final target was not actually reached", "ERROR")
         return false
     end
@@ -1614,6 +1704,13 @@ function PathfindingModule.Navigate(target, mode)
                 break
             else
                 Log("❌ Path following failed", "WARN")
+                if Config.UseDirectFallback then
+                    success = DirectMoveFallback(endPos, navigationId, "Path following stalled")
+                    if success then
+                        Log("Direct fallback navigation succeeded", "INFO")
+                        break
+                    end
+                end
             end
         else
             Log("❌ Path computation failed (attempt " .. attempt .. ")", "ERROR")
@@ -1630,6 +1727,14 @@ function PathfindingModule.Navigate(target, mode)
                         Log("🎉 Navigation succeeded!", "INFO")
                         break
                     end
+                end
+            end
+
+            if not success and Config.UseDirectFallback then
+                success = DirectMoveFallback(endPos, navigationId, "PathfindingService could not compute a route")
+                if success then
+                    Log("Direct fallback navigation succeeded", "INFO")
+                    break
                 end
             end
         end
@@ -1781,7 +1886,8 @@ function PathfindingModule.ExportStatistics()
         domeMappingStarts = Stats.domeMappingStarts,
         raycastJumpDecisions = Stats.raycastJumpDecisions,
         laddersUsed = Stats.laddersUsed,
-        laddersDetected = Stats.laddersDetected
+        laddersDetected = Stats.laddersDetected,
+        directFallbacks = Stats.directFallbacks
     }
 end
 
