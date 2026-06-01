@@ -70,6 +70,14 @@ local Config = {
     DomeMappingStepWait = 0.03,
     DomeMappingReflectionBounces = 2,
     MoveToRefreshInterval = 0.15,
+    UseRaycastJumpAnalysis = true,
+    JumpCheckInterval = 0.08,
+    LadderAssist = true,
+    LadderScanRadius = 60,
+    LadderScanRays = 36,
+    LadderApproachDistance = 2.8,
+    LadderClimbTimeout = 7,
+    LadderUseMinHeightGain = 4,
 }
 
 -- State
@@ -110,7 +118,10 @@ local Stats = {
     raycastingUsed = 0,
     cliffsAvoided = 0,
     visionRecoveries = 0,
-    domeMappingStarts = 0
+    domeMappingStarts = 0,
+    raycastJumpDecisions = 0,
+    laddersUsed = 0,
+    laddersDetected = 0
 }
 
 -- ===================================
@@ -794,23 +805,22 @@ local function ExecuteJump(jumpType)
     Stats.jumpsExecuted = Stats.jumpsExecuted + 1
     
     if jumpType == "high_jump" then
-        Log("High jump: Triple jump sequence")
+        Log("High jump: fast triple jump sequence")
         humanoid.Jump = true
-        task.wait(0.2)
-        humanoid.Jump = true
-        task.wait(0.2)
-        humanoid.Jump = true
-        task.wait(0.3)
+        task.spawn(function()
+            task.wait(0.08)
+            humanoid.Jump = true
+            task.wait(0.08)
+            humanoid.Jump = true
+        end)
         
     elseif jumpType == "gap_jump" then
-        Log("Gap jump: Single jump with momentum")
+        Log("Gap jump: fast jump with momentum")
         humanoid.Jump = true
-        task.wait(0.3)
         
     else
-        Log("Normal jump: Single hop")
+        Log("Normal jump: fast single hop")
         humanoid.Jump = true
-        task.wait(0.2)
     end
     
     return true
@@ -819,6 +829,28 @@ end
 local function CheckJumpRequired(currentPos, nextPos)
     local heightDiff = nextPos.Y - currentPos.Y
     
+    if HasRaycasting() and Config.UseRaycastJumpAnalysis and type(RaycastingVision.AnalyzeMovementSegment) == "function" then
+        local ok, analysis = pcall(function()
+            return RaycastingVision.AnalyzeMovementSegment(currentPos, nextPos)
+        end)
+
+        if ok and analysis then
+            if analysis.ladder then
+                return false, nil
+            end
+
+            if analysis.needsJump then
+                Stats.raycastJumpDecisions = Stats.raycastJumpDecisions + 1
+                Log("Raycast jump decision: " .. tostring(analysis.reason or "unknown"), "INFO")
+                return true, analysis.jumpType or "normal"
+            end
+
+            if analysis.hasHazard then
+                Log("Raycast detected hazard in movement segment", "WARN")
+            end
+        end
+    end
+
     -- Immediate high jump detection
     if heightDiff > 4 then
         return true, "high_jump"
@@ -1049,6 +1081,156 @@ local function IsActiveNavigation(navigationId)
     return State.isNavigating and State.navigationId == navigationId
 end
 
+local function GetLadderTopPosition(ladderHit)
+    if not ladderHit or not ladderHit.instance or not ladderHit.instance:IsA("BasePart") then
+        return ladderHit and ladderHit.position or nil
+    end
+
+    local ladderPart = ladderHit.instance
+    local normal = ladderHit.normal or Vector3.new(0, 0, -1)
+    local top = ladderPart.Position + Vector3.new(0, ladderPart.Size.Y / 2 + 2, 0)
+    return top + (normal * Config.LadderApproachDistance)
+end
+
+local function GetLadderApproachPosition(ladderHit)
+    if not ladderHit then return nil end
+
+    local rootPart = GetRootPart()
+    local basePosition = ladderHit.position
+    local normal = ladderHit.normal or Vector3.new(0, 0, -1)
+
+    if ladderHit.instance and ladderHit.instance:IsA("BasePart") then
+        basePosition = Vector3.new(ladderHit.instance.Position.X, rootPart and rootPart.Position.Y or ladderHit.position.Y, ladderHit.instance.Position.Z)
+    end
+
+    return basePosition + (normal * Config.LadderApproachDistance)
+end
+
+local function FindUsefulLadder(targetPos)
+    if not HasRaycasting() or not Config.LadderAssist or type(RaycastingVision.ScanForInteractives) ~= "function" then
+        return nil
+    end
+
+    local rootPart = GetRootPart()
+    if not rootPart then return nil end
+
+    local heightGain = targetPos.Y - rootPart.Position.Y
+    if heightGain < Config.LadderUseMinHeightGain then
+        return nil
+    end
+
+    local ok, scan = pcall(function()
+        return RaycastingVision.ScanForInteractives(Config.LadderScanRadius, Config.LadderScanRays, true)
+    end)
+
+    if not ok or not scan or not scan.nearestLadder then
+        return nil
+    end
+
+    Stats.laddersDetected = Stats.laddersDetected + #scan.ladders
+
+    local ladder = scan.nearestLadder
+    local ladderTop = GetLadderTopPosition(ladder)
+    if not ladderTop or ladderTop.Y <= rootPart.Position.Y + Config.LadderUseMinHeightGain then
+        return nil
+    end
+
+    local currentToTarget = GetDistance(rootPart.Position, targetPos)
+    local ladderRouteDistance = GetDistance(rootPart.Position, ladder.position) + GetDistance(ladderTop, targetPos)
+
+    if ladderRouteDistance > currentToTarget * 1.8 and ladder.distance > 12 then
+        return nil
+    end
+
+    return ladder
+end
+
+local function MoveTowardPosition(position, timeout, navigationId)
+    local humanoid = GetHumanoid()
+    local rootPart = GetRootPart()
+    if not humanoid or not rootPart then return false end
+
+    local startTime = tick()
+    local lastMove = 0
+
+    while tick() - startTime < timeout do
+        if navigationId and not IsActiveNavigation(navigationId) then
+            return false
+        end
+
+        rootPart = GetRootPart()
+        if not rootPart then return false end
+
+        if GetDistance(rootPart.Position, position) <= 3.5 then
+            return true
+        end
+
+        if tick() - lastMove >= Config.MoveToRefreshInterval then
+            humanoid:MoveTo(position)
+            lastMove = tick()
+        end
+
+        task.wait(0.04)
+    end
+
+    return false
+end
+
+local function TryUseLadder(ladderHit, targetPos, navigationId)
+    if not ladderHit then return false end
+
+    local humanoid = GetHumanoid()
+    local rootPart = GetRootPart()
+    if not humanoid or not rootPart then return false end
+
+    local approach = GetLadderApproachPosition(ladderHit)
+    local top = GetLadderTopPosition(ladderHit)
+    if not approach or not top then return false end
+
+    Log("Ladder detected: approaching " .. ladderHit.instance.Name, "INFO")
+
+    if not MoveTowardPosition(approach, 4, navigationId) then
+        Log("Could not approach ladder cleanly", "WARN")
+        return false
+    end
+
+    local climbStart = tick()
+    while tick() - climbStart < Config.LadderClimbTimeout do
+        if navigationId and not IsActiveNavigation(navigationId) then
+            return false
+        end
+
+        rootPart = GetRootPart()
+        if not rootPart then return false end
+
+        if rootPart.Position.Y >= top.Y - 4 or GetDistance(rootPart.Position, targetPos) < GetDistance(approach, targetPos) then
+            Stats.laddersUsed = Stats.laddersUsed + 1
+            Log("Ladder climb assisted successfully", "INFO")
+            return true
+        end
+
+        humanoid:MoveTo(top)
+        humanoid.Jump = true
+        pcall(function()
+            humanoid:ChangeState(Enum.HumanoidStateType.Climbing)
+        end)
+
+        task.wait(0.12)
+    end
+
+    Log("Ladder climb timed out; falling back to normal pathing", "WARN")
+    return false
+end
+
+local function TryUseHelpfulLadder(targetPos, navigationId)
+    local ladder = FindUsefulLadder(targetPos)
+    if not ladder then
+        return false
+    end
+
+    return TryUseLadder(ladder, targetPos, navigationId)
+end
+
 local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigationId)
     local humanoid = GetHumanoid()
     local rootPart = GetRootPart()
@@ -1067,16 +1249,18 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     
     CreateWaypointMarker(waypointPos, Config.WaypointColor)
     
+    if Config.LadderAssist and waypointPos.Y - rootPart.Position.Y >= Config.LadderUseMinHeightGain then
+        TryUseHelpfulLadder(waypointPos, navigationId)
+    end
+
     -- Handle jump waypoints
     if waypoint.Action == Enum.PathWaypointAction.Jump then
         if Config.UseJumpOptimization then
             Log("PathfindingService jump - using custom jump")
             ExecuteJump("normal")
-            task.wait(0.2)
         else
             Log("PathfindingService jump - using simple jump")
             humanoid.Jump = true
-            task.wait(0.2)
         end
     end
     
@@ -1086,7 +1270,6 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
         if needsJump then
             Log("⚡ Pre-check: Jump needed immediately! Type: " .. tostring(jumpType))
             ExecuteJump(jumpType)
-            task.wait(0.3)
             jumpExecuted = true
         end
     end
@@ -1146,14 +1329,11 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
         
         -- Continuous jump checking (execute in coroutine to not pause movement)
         if Config.UseJumpOptimization and not jumpExecuted then
-            if tick() - lastJumpCheck >= 0.2 then
+            if tick() - lastJumpCheck >= Config.JumpCheckInterval then
                 local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
                 if needsJump then
                     Log("⚡ Jump needed: " .. tostring(jumpType))
-                    -- Execute jump in separate coroutine so it doesn't pause movement loop
-                    task.spawn(function()
-                        ExecuteJump(jumpType)
-                    end)
+                    ExecuteJump(jumpType)
                     jumpExecuted = true
                 end
                 lastJumpCheck = tick()
@@ -1334,6 +1514,7 @@ function PathfindingModule.Navigate(target, mode)
     if HasRaycasting() then
         Log("👁️  Raycasting vision: ACTIVE", "INFO")
         StartRaycastMapping()
+        TryUseHelpfulLadder(endPos, navigationId)
     else
         Log("⚠️  Raycasting vision: DISABLED", "WARN")
     end
@@ -1498,6 +1679,8 @@ function PathfindingModule.GetDetailedStatus()
         preNavigationScan = Config.PreNavigationScan,
         continuousScanning = Config.ContinuousScanning,
         backgroundDomeMapping = Config.UseBackgroundDomeMapping,
+        raycastJumpAnalysis = Config.UseRaycastJumpAnalysis,
+        ladderAssist = Config.LadderAssist,
         cliffAvoidance = Config.CliffAvoidance,
         visionGuidedRecovery = Config.VisionGuidedRecovery,
         smartPathing = Config.UseSmartPathing,
@@ -1544,7 +1727,10 @@ function PathfindingModule.ExportStatistics()
         raycastingUsed = Stats.raycastingUsed,
         cliffsAvoided = Stats.cliffsAvoided,
         visionRecoveries = Stats.visionRecoveries,
-        domeMappingStarts = Stats.domeMappingStarts
+        domeMappingStarts = Stats.domeMappingStarts,
+        raycastJumpDecisions = Stats.raycastJumpDecisions,
+        laddersUsed = Stats.laddersUsed,
+        laddersDetected = Stats.laddersDetected
     }
 end
 

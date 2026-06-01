@@ -19,6 +19,7 @@ local RaycastingVision = {}
 
 -- Services
 local Players = game:GetService("Players")
+local CollectionService = game:GetService("CollectionService")
 local LocalPlayer = Players.LocalPlayer
 
 -- Configuration
@@ -69,6 +70,15 @@ local Config = {
     LavaDetection = true,
     KillbrickDetection = true,
     
+    -- Part classification
+    InteractiveScanRadius = 55,
+    InteractiveRayCount = 36,
+    InspectScriptNames = true,
+    InspectScriptSource = false,
+    MaxScriptSourceChecks = 3,
+    MovementAnalysisStep = 1.5,
+    MovementAnalysisHeight = 2,
+
     -- Visualization
     ShowRays = false,
     ShowObstacles = false,
@@ -106,7 +116,10 @@ local Stats = {
     domeSweeps = 0,
     domeHits = 0,
     reflectionHits = 0,
-    reflectionRays = 0
+    reflectionRays = 0,
+    laddersDetected = 0,
+    hazardsClassified = 0,
+    movementAnalyses = 0
 }
 
 -- ===================================
@@ -242,6 +255,370 @@ local function PerformRaycast(origin, direction, distance, useCache)
     end
     
     return result
+end
+
+-- ===================================
+-- PART CLASSIFICATION + MOVEMENT ANALYSIS
+-- ===================================
+
+local IsKillbrick
+local IsWater
+local IsLava
+
+local function TextMatchesAny(text, needles)
+    if not text then return false end
+    text = tostring(text):lower()
+
+    for _, needle in ipairs(needles) do
+        if text:find(needle, 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function GetSafeTags(instance)
+    local ok, tags = pcall(function()
+        return CollectionService:GetTags(instance)
+    end)
+
+    if ok and tags then
+        return tags
+    end
+
+    return {}
+end
+
+local function GetAttributeText(instance)
+    local pieces = {}
+    local names = {"Type", "PartType", "AIType", "PathType", "Role", "Kind", "Hazard", "Climbable"}
+
+    for _, name in ipairs(names) do
+        local ok, value = pcall(function()
+            return instance:GetAttribute(name)
+        end)
+
+        if ok and value ~= nil then
+            table.insert(pieces, tostring(value))
+        end
+    end
+
+    return table.concat(pieces, " ")
+end
+
+local function GetScriptHints(instance)
+    if not Config.InspectScriptNames and not Config.InspectScriptSource then
+        return ""
+    end
+
+    local hints = {}
+    local checkedSources = 0
+
+    for _, descendant in ipairs(instance:GetDescendants()) do
+        if descendant:IsA("Script") or descendant:IsA("LocalScript") or descendant:IsA("ModuleScript") then
+            if Config.InspectScriptNames then
+                table.insert(hints, descendant.Name)
+            end
+
+            if Config.InspectScriptSource and checkedSources < Config.MaxScriptSourceChecks then
+                checkedSources = checkedSources + 1
+                local ok, source = pcall(function()
+                    return descendant.Source
+                end)
+
+                if ok and source then
+                    table.insert(hints, source:sub(1, 1200))
+                end
+            end
+        end
+    end
+
+    return table.concat(hints, " ")
+end
+
+local function GetInstanceSignalText(instance)
+    if not instance then return "" end
+
+    local pieces = {}
+    local current = instance
+    local depth = 0
+
+    while current and current ~= workspace and depth < 5 do
+        table.insert(pieces, current.Name)
+        table.insert(pieces, current.ClassName)
+        table.insert(pieces, GetAttributeText(current))
+
+        for _, tag in ipairs(GetSafeTags(current)) do
+            table.insert(pieces, tag)
+        end
+
+        current = current.Parent
+        depth = depth + 1
+    end
+
+    table.insert(pieces, GetScriptHints(instance))
+
+    return table.concat(pieces, " ")
+end
+
+function RaycastingVision.ClassifyInstance(instance)
+    local result = {
+        type = "unknown",
+        isLadder = false,
+        isClimbable = false,
+        isHazard = false,
+        isKillbrick = false,
+        isWater = false,
+        isJumpable = false,
+        isObstacle = false,
+        confidence = 0,
+        reason = nil,
+        instance = instance
+    }
+
+    if not instance then
+        return result
+    end
+
+    local signalText = GetInstanceSignalText(instance)
+    local ladderWords = {"ladder", "truss", "climb", "climbable", "rung"}
+    local hazardWords = {"kill", "death", "lava", "void", "hazard", "damage", "deadly", "acid", "spike"}
+    local waterWords = {"water", "swim"}
+    local jumpWords = {"jump", "ledge", "gap", "step", "stair", "stairs", "platform", "obby"}
+
+    if instance:IsA("TrussPart") or TextMatchesAny(signalText, ladderWords) then
+        result.type = "ladder"
+        result.isLadder = true
+        result.isClimbable = true
+        result.confidence = instance:IsA("TrussPart") and 1 or 0.75
+        result.reason = instance:IsA("TrussPart") and "truss_part" or "ladder_signal"
+        return result
+    end
+
+    if Config.KillbrickDetection and (IsKillbrick(instance) or TextMatchesAny(signalText, hazardWords)) then
+        result.type = "hazard"
+        result.isHazard = true
+        result.isKillbrick = true
+        result.confidence = 0.85
+        result.reason = "hazard_signal"
+        Stats.hazardsClassified = Stats.hazardsClassified + 1
+        return result
+    end
+
+    if IsWater(instance, instance:IsA("BasePart") and instance.Material or nil) or TextMatchesAny(signalText, waterWords) then
+        result.type = "water"
+        result.isHazard = true
+        result.isWater = true
+        result.confidence = 0.7
+        result.reason = "water_signal"
+        return result
+    end
+
+    if IsLava(instance) then
+        result.type = "hazard"
+        result.isHazard = true
+        result.confidence = 0.9
+        result.reason = "lava_signal"
+        Stats.hazardsClassified = Stats.hazardsClassified + 1
+        return result
+    end
+
+    if TextMatchesAny(signalText, jumpWords) then
+        result.type = "jumpable"
+        result.isJumpable = true
+        result.isObstacle = true
+        result.confidence = 0.55
+        result.reason = "jump_signal"
+        return result
+    end
+
+    if instance:IsA("BasePart") and instance.CanCollide then
+        result.type = "obstacle"
+        result.isObstacle = true
+        result.confidence = 0.35
+        result.reason = "collidable_part"
+    end
+
+    return result
+end
+
+local function AddInteractiveHit(results, rayResult, origin, kind)
+    if not rayResult or not rayResult.Instance then
+        return
+    end
+
+    local classification = RaycastingVision.ClassifyInstance(rayResult.Instance)
+    local hit = {
+        position = rayResult.Position,
+        normal = rayResult.Normal,
+        instance = rayResult.Instance,
+        distance = (rayResult.Position - origin).Magnitude,
+        kind = kind or "scan",
+        classification = classification
+    }
+
+    if classification.isLadder then
+        table.insert(results.ladders, hit)
+        Stats.laddersDetected = Stats.laddersDetected + 1
+
+        if not results.nearestLadder or hit.distance < results.nearestLadder.distance then
+            results.nearestLadder = hit
+        end
+    elseif classification.isHazard then
+        table.insert(results.hazards, hit)
+    elseif classification.isJumpable then
+        table.insert(results.jumpables, hit)
+    elseif classification.isObstacle then
+        table.insert(results.obstacles, hit)
+    end
+end
+
+function RaycastingVision.ScanForInteractives(radius, rayCount, includeDomeMap)
+    radius = radius or Config.InteractiveScanRadius
+    rayCount = rayCount or Config.InteractiveRayCount
+
+    local rootPart = GetRootPart()
+    if not rootPart then return nil end
+
+    local origin = rootPart.Position + Vector3.new(0, 2, 0)
+    local results = {
+        ladders = {},
+        hazards = {},
+        jumpables = {},
+        obstacles = {},
+        nearestLadder = nil
+    }
+
+    for i = 0, rayCount - 1 do
+        local yaw = (math.pi * 2 / rayCount) * i
+        local flat = Vector3.new(math.cos(yaw), 0, math.sin(yaw))
+
+        for _, pitch in ipairs({0, 0.35, -0.25}) do
+            local direction = Vector3.new(flat.X, pitch, flat.Z).Unit
+            local rayResult = PerformRaycast(origin, direction, radius, false)
+            AddInteractiveHit(results, rayResult, origin, "direct")
+        end
+    end
+
+    if includeDomeMap then
+        for _, entry in pairs(State.domeMap) do
+            if entry.instance then
+                local classification = RaycastingVision.ClassifyInstance(entry.instance)
+                if classification.isLadder or classification.isHazard or classification.isJumpable then
+                    local hit = {
+                        position = entry.position,
+                        normal = entry.normal,
+                        instance = entry.instance,
+                        distance = (entry.position - origin).Magnitude,
+                        kind = "dome_map",
+                        classification = classification
+                    }
+
+                    if classification.isLadder then
+                        table.insert(results.ladders, hit)
+                        if not results.nearestLadder or hit.distance < results.nearestLadder.distance then
+                            results.nearestLadder = hit
+                        end
+                    elseif classification.isHazard then
+                        table.insert(results.hazards, hit)
+                    elseif classification.isJumpable then
+                        table.insert(results.jumpables, hit)
+                    end
+                end
+            end
+        end
+    end
+
+    return results
+end
+
+function RaycastingVision.AnalyzeMovementSegment(startPos, endPos)
+    Stats.movementAnalyses = Stats.movementAnalyses + 1
+
+    local direction = endPos - startPos
+    local distance = direction.Magnitude
+    if distance < 0.1 then
+        return {needsJump = false, hasHazard = false}
+    end
+
+    direction = direction.Unit
+    local sampleDistance = math.min(distance, Config.InteractiveScanRadius)
+    local step = math.max(0.75, Config.MovementAnalysisStep)
+    local heightDiff = endPos.Y - startPos.Y
+    local analysis = {
+        needsJump = false,
+        jumpType = nil,
+        reason = nil,
+        hasHazard = false,
+        hazard = nil,
+        ladder = nil,
+        obstacle = nil,
+        voidStart = nil,
+        voidLength = 0
+    }
+
+    if heightDiff > 4 then
+        analysis.needsJump = true
+        analysis.jumpType = "high_jump"
+        analysis.reason = "height_diff"
+    elseif heightDiff > 1.2 then
+        analysis.needsJump = true
+        analysis.jumpType = "normal"
+        analysis.reason = "small_ledge"
+    end
+
+    local waistOrigin = startPos + Vector3.new(0, Config.MovementAnalysisHeight, 0)
+    local waistHit = PerformRaycast(waistOrigin, direction, math.min(sampleDistance, 9), false)
+    if waistHit then
+        local classification = RaycastingVision.ClassifyInstance(waistHit.Instance)
+        if classification.isLadder then
+            analysis.ladder = {
+                position = waistHit.Position,
+                normal = waistHit.Normal,
+                instance = waistHit.Instance,
+                classification = classification,
+                distance = (waistHit.Position - waistOrigin).Magnitude
+            }
+            return analysis
+        elseif classification.isHazard then
+            analysis.hasHazard = true
+            analysis.hazard = waistHit
+        elseif classification.isObstacle and (waistHit.Position - waistOrigin).Magnitude < 4 then
+            analysis.needsJump = true
+            analysis.jumpType = "normal"
+            analysis.reason = "low_obstacle"
+            analysis.obstacle = waistHit
+        end
+    end
+
+    local voidStart = nil
+    local voidLength = 0
+    local samples = math.floor(sampleDistance / step)
+
+    for i = 1, samples do
+        local point = startPos + (direction * (i * step))
+        local hasGround = RaycastingVision.CheckGround(point, 20)
+
+        if not hasGround then
+            if not voidStart then
+                voidStart = i * step
+            end
+            voidLength = voidLength + step
+        elseif voidStart then
+            break
+        end
+    end
+
+    if voidStart then
+        analysis.needsJump = true
+        analysis.jumpType = "gap_jump"
+        analysis.reason = "void_gap"
+        analysis.voidStart = voidStart
+        analysis.voidLength = voidLength
+    end
+
+    return analysis
 end
 
 -- ===================================
@@ -938,7 +1315,7 @@ end
 -- HAZARD DETECTION
 -- ===================================
 
-local function IsKillbrick(instance)
+IsKillbrick = function(instance)
     if not instance then return false end
     
     -- Check for common killbrick indicators
@@ -950,7 +1327,7 @@ local function IsKillbrick(instance)
     return false
 end
 
-local function IsWater(instance, material)
+IsWater = function(instance, material)
     if not Config.WaterDetection then return false end
     
     if material == Enum.Material.Water then
@@ -964,7 +1341,7 @@ local function IsWater(instance, material)
     return false
 end
 
-local function IsLava(instance)
+IsLava = function(instance)
     if not Config.LavaDetection then return false end
     
     if instance then
@@ -1162,7 +1539,10 @@ function RaycastingVision.GetStatistics()
         domeMapCells = #State.domeMapOrder,
         reflectionRays = Stats.reflectionRays,
         reflectionHits = Stats.reflectionHits,
-        reflectionEdges = #State.reflectionEdges
+        reflectionEdges = #State.reflectionEdges,
+        laddersDetected = Stats.laddersDetected,
+        hazardsClassified = Stats.hazardsClassified,
+        movementAnalyses = Stats.movementAnalyses
     }
 end
 
