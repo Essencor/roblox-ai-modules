@@ -265,6 +265,12 @@ source = source:gsub(
 )
 
 source = source:gsub(
+	'"Pathfinding module ready! v" %.%. module%.Version',
+	'"Pathfinding module ready! v" .. tostring(module.Version or "Unknown")',
+	1
+)
+
+source = source:gsub(
 	'Pathfinding = "https://raw%.githubusercontent%.com/Essencor/roblox%-ai%-modules/main/pathfinding%-module"',
 	function()
 		return 'Pathfinding = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/refs/heads/main/pathfinding-module",\n   Raycasting = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/refs/heads/main/raycasting_vision-module"'

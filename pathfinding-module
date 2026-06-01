@@ -15,6 +15,7 @@
 ]]
 
 local PathfindingModule = {}
+PathfindingModule.Version = "4.0"
 
 -- Services
 local PathfindingService = game:GetService("PathfindingService")
