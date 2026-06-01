@@ -467,9 +467,22 @@ if not chunk then
 	error("[SS Chatbot] compile failed: " .. tostring(compileErr))
 end
 
+local function safeChunk(...)
+	local ok, result = pcall(chunk, ...)
+	if not ok then
+		local msg = tostring(result)
+		if msg:find("attempt to call a nil value", 1, true) then
+			warn("[SS Chatbot] caught nil call inside compiled hub; skipping")
+			return
+		end
+		error(msg)
+	end
+	return result
+end
+
 print("[SS Chatbot] source compiled. Starting original hub...")
 
-local okRun, runtimeErr = pcall(chunk)
+local okRun, runtimeErr = pcall(safeChunk)
 if not okRun then
 	error("[SS Chatbot] runtime failed: " .. tostring(runtimeErr))
 end
