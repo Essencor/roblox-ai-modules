@@ -44,7 +44,7 @@ local Config = {
     
     -- Background dome mapping
     DomeMappingEnabled = true,
-    DomeScanRadius = 70,
+    DomeScanRadius = 35,
     DomeHorizontalSteps = 36,
     DomeVerticalSteps = 9,
     DomePitchMin = -75,
@@ -58,7 +58,7 @@ local Config = {
     -- Reflection mapping
     ReflectionMappingEnabled = true,
     ReflectionBounceCount = 2,
-    ReflectionDistance = 45,
+    ReflectionDistance = 20,
     ReflectionEveryNRays = 2,
     ReflectionSurfaceOffset = 0.15,
     ReflectionColor = Color3.new(1, 0.85, 0),
