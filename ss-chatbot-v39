@@ -1,7 +1,7 @@
--- SS Chatbot public loader v39
+-- SS Chatbot public loader v40
 -- Loads the restored original hub, applies runtime fixes, then runs it.
 
-print("[SS Chatbot] loader v39 started")
+print("[SS Chatbot] loader v40 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = "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"
@@ -102,8 +102,10 @@ source = source:gsub(escapePattern("sk-or-v1-66e8eab17332018f13a2418bcda2583c2ef
 
 source = source:gsub(
 	'local function loadRemoteChunk%(url, label%)%s*\n%s*local source = game:HttpGet%(url, true%)',
-	[[local function loadRemoteChunk(url, label)
-   local source = game:HttpGet(url, true)]],
+	function()
+		return [[local function loadRemoteChunk(url, label)
+   local source = game:HttpGet(url, true)]]
+	end,
 	1
 )
 
@@ -120,7 +122,76 @@ source = source:gsub(
 
 source = source:gsub(
 	'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
-	'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]',
+	function()
+		return 'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]'
+	end,
+	1
+)
+
+local duplicateTabBlock = [==[
+-- Create Tabs
+local ChatTab = Window:CreateTab("Chatbot", 4483362458)
+local APITab = Window:CreateTab("API Setup", 4483362458)
+local PromptsTab = Window:CreateTab("Prompts", 4483362458)
+local DebugTab = Window:CreateTab("Debug", 4483362458)
+local ModulesTab = Window:CreateTab("Modules", 4483362458)
+local MemoryTab = Window:CreateTab("Memory", 4483362458)
+local SettingsTab = Window:CreateTab("Settings", 4483362458)
+]==]
+
+local removedExact
+source, removedExact = source:gsub(duplicateTabBlock, "-- Tabs are created below, next to their actual UI content.", 1)
+
+if removedExact == 0 then
+	source = source:gsub(
+		"%-%- Create Tabs%s*\n"
+		.. 'local ChatTab = Window:CreateTab%("Chatbot", 4483362458%)%s*\n'
+		.. 'local APITab = Window:CreateTab%("API Setup", 4483362458%)%s*\n'
+		.. 'local PromptsTab = Window:CreateTab%("Prompts", 4483362458%)%s*\n'
+		.. 'local DebugTab = Window:CreateTab%("Debug", 4483362458%)%s*\n'
+		.. 'local ModulesTab = Window:CreateTab%("Modules", 4483362458%)%s*\n'
+		.. 'local MemoryTab = Window:CreateTab%("Memory", 4483362458%)%s*\n'
+		.. 'local SettingsTab = Window:CreateTab%("Settings", 4483362458%)',
+		function()
+			return "-- Tabs are created below, next to their actual UI content."
+		end,
+		1
+	)
+end
+
+source = source:gsub(
+	'MemoryTab = Window:CreateTab%("Memory", 4483362458%)%s*\n%s*local MemorySection = MemoryTab:CreateSection%("Memory Statistics"%)',
+	function()
+		return 'MemoryTab = Window:CreateTab("Memory", 4483362458)\n\ndo\nlocal MemorySection = MemoryTab:CreateSection("Memory Statistics")'
+	end,
+	1
+)
+
+source = source:gsub(
+	'local GlobalMemorySlider = MemoryTab:CreateSlider%({(.-)%s*\n}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS & INFO',
+	function(sliderBody)
+		return 'local GlobalMemorySlider = MemoryTab:CreateSlider({' .. sliderBody
+			.. '\n})\n\n'
+			.. '-- Initialize memory stats display while the memory UI locals are still in scope.\n'
+			.. 'UpdateMemoryStats()\nend\n\n'
+			.. '-- ========================================\n-- TAB 7: SETTINGS & INFO'
+	end,
+	1
+)
+
+source = source:gsub(
+	'SettingsTab = Window:CreateTab%("Settings", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%("Information"%)',
+	function()
+		return 'SettingsTab = Window:CreateTab("Settings", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection("Information")'
+	end,
+	1
+)
+
+source = source:gsub(
+	'%-%- Initialize memory stats display%s*\nUpdateMemoryStats%(%)%s*\n%s*Rayfield:Notify%({',
+	function()
+		return 'end\n\nRayfield:Notify({'
+	end,
 	1
 )
 
