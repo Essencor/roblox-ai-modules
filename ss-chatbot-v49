@@ -31,16 +31,16 @@ loaderSource = loaderSource:gsub(
 )
 
 local modelPatch = [==[
-source = source:gsub('Model = "[^\"]+",', 'Model = "google/gemma-4-31b-it:free",', 1)
+source = source:gsub('Model = "[^\"]+",', 'Model = "liquid/lfm-2-24b-a2b",', 1)
 
 source = source:gsub(
 	'%-%- Model%-Specific API Keys%s*local ModelApiKeys = {%s*.-%s*}',
 	function()
 		return [[-- Model-Specific API Keys
 local ModelApiKeys = {
-   ["google/gemma-4-31b-it:free"] = DEFAULT_OPENROUTER_KEY,
-   ["nousresearch/hermes-3-llama-3.1-405b:free"] = DEFAULT_OPENROUTER_KEY,
-   ["liquid/lfm-2-24b-a2b"] = DEFAULT_OPENROUTER_KEY
+   ["liquid/lfm-2-24b-a2b"] = DEFAULT_OPENROUTER_KEY,
+   ["meta-llama/llama-3.1-8b-instruct"] = DEFAULT_OPENROUTER_KEY,
+   ["qwen/qwen3.5-9b"] = DEFAULT_OPENROUTER_KEY
 }]]
 	end,
 	1
@@ -51,9 +51,9 @@ source = source:gsub(
 	function()
 		return [[-- Available Free Models
 local AvailableModels = {
-   "google/gemma-4-31b-it:free",
-   "nousresearch/hermes-3-llama-3.1-405b:free",
-   "liquid/lfm-2-24b-a2b"
+   "liquid/lfm-2-24b-a2b",
+   "meta-llama/llama-3.1-8b-instruct",
+   "qwen/qwen3.5-9b"
 }]]
 	end,
 	1

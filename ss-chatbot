@@ -137,6 +137,38 @@ source = source:gsub(escapePattern("sk-or-v1-23670df3e8d9c921af977a4e9202c2a750e
 source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
 
 source = source:gsub(
+	'Model = "[^"]+",',
+	'Model = "liquid/lfm-2-24b-a2b",',
+	1
+)
+
+source = source:gsub(
+	'%-%- Model%-Specific API Keys%s*local ModelApiKeys = {%s*.-%s*}',
+	function()
+		return [[-- Model-Specific API Keys
+local ModelApiKeys = {
+   ["liquid/lfm-2-24b-a2b"] = DEFAULT_OPENROUTER_KEY,
+   ["meta-llama/llama-3.1-8b-instruct"] = DEFAULT_OPENROUTER_KEY,
+   ["qwen/qwen3.5-9b"] = DEFAULT_OPENROUTER_KEY
+}]]
+	end,
+	1
+)
+
+source = source:gsub(
+	'%-%- Available Free Models%s*local AvailableModels = {%s*.-%s*}',
+	function()
+		return [[-- Available Free Models
+local AvailableModels = {
+   "liquid/lfm-2-24b-a2b",
+   "meta-llama/llama-3.1-8b-instruct",
+   "qwen/qwen3.5-9b"
+}]]
+	end,
+	1
+)
+
+source = source:gsub(
 	'PathfindingEnabled = false,  %-%- Pathfinding module toggle',
 	function()
 		return 'PathfindingEnabled = false,  -- Pathfinding module toggle\n   RaycastingEnabled = false,  -- Raycasting vision module toggle'
