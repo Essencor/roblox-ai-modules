@@ -1,0 +1,139 @@
+-- SS Chatbot public loader v39
+-- Loads the restored original hub, applies runtime fixes, then runs it.
+
+print("[SS Chatbot] loader v39 started")
+
+local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
+local DEFAULT_OPENROUTER_KEY = "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"
+
+local function patchNumericLoadstringChunks()
+	if type(loadstring) ~= "function" then
+		return
+	end
+
+	local env = (getgenv and getgenv()) or _G
+	if env.__SSChatbotNumericLoadstringPatched then
+		return
+	end
+
+	local originalLoadstring = loadstring
+	local function noop()
+		return nil
+	end
+
+	local function noopFactory()
+		return noop
+	end
+
+	local function guardedLoadstring(source, chunkName)
+		if type(source) == "string" and source:match("^%s*%d+%s*$") then
+			return noopFactory
+		end
+
+		local isNumericChunk = type(chunkName) == "string" and chunkName:match("^%d+$")
+		local chunk, compileErr = originalLoadstring(source, chunkName)
+		if not chunk then
+			if isNumericChunk then
+				return function(...)
+					warn("[SS Chatbot] skipped bad numeric asset chunk:", tostring(chunkName))
+					return noop
+				end
+			end
+
+			return nil, compileErr
+		end
+
+		if isNumericChunk then
+			return function(...)
+				local ok, result = pcall(chunk, ...)
+				if not ok then
+					local message = tostring(result)
+					if message:find("attempt to call a nil value", 1, true) then
+						warn("[SS Chatbot] skipped bad numeric asset chunk:", chunkName)
+						return noop
+					end
+
+					error(message, 0)
+				end
+
+				if result == nil or type(result) == "number" then
+					return noop
+				end
+
+				return result
+			end
+		end
+
+		return chunk
+	end
+
+	env.loadstring = guardedLoadstring
+	_G.loadstring = guardedLoadstring
+	env.__SSChatbotNumericLoadstringPatched = true
+	print("[SS Chatbot] patched numeric loadstring chunks")
+end
+
+pcall(patchNumericLoadstringChunks)
+
+local function escapePattern(text)
+	return (text:gsub("([^%w])", "%%%1"))
+end
+
+local okFetch, source = pcall(function()
+	return game:HttpGet(SOURCE_URL, true)
+end)
+
+if not okFetch then
+	error("[SS Chatbot] HttpGet failed: " .. tostring(source))
+end
+
+if type(source) ~= "string" or source == "" then
+	error("[SS Chatbot] Empty source from GitHub")
+end
+
+if source:find("SS Chatbot public loader", 1, true) then
+	error("[SS Chatbot] Source URL returned the loader instead of the original hub")
+end
+
+source = source:gsub('ApiKey = "",', 'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",', 1)
+source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
+source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
+source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
+
+source = source:gsub(
+	'local function loadRemoteChunk%(url, label%)%s*\n%s*local source = game:HttpGet%(url, true%)',
+	[[local function loadRemoteChunk(url, label)
+   local source = game:HttpGet(url, true)]],
+	1
+)
+
+source = source:gsub(
+	'if result == nil then%s*\n%s*error%(string%.format%("%[AI Chatbot%] %%s returned nil", label%)%)%s*\n%s*end',
+	function()
+		return [[if result == nil then
+      warn(string.format("[AI Chatbot] %s returned nil; continuing with empty table", label))
+      result = {}
+   end]]
+	end,
+	1
+)
+
+source = source:gsub(
+	'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
+	'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]',
+	1
+)
+
+local chunk, compileErr = loadstring(source)
+if not chunk then
+	error("[SS Chatbot] compile failed: " .. tostring(compileErr))
+end
+
+print("[SS Chatbot] source compiled. Starting original hub...")
+
+local okRun, runtimeErr = pcall(chunk)
+if not okRun then
+	error("[SS Chatbot] runtime failed: " .. tostring(runtimeErr))
+end
+
+print("[SS Chatbot] original hub started")
