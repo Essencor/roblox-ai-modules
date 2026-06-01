@@ -73,8 +73,8 @@ local Config = {
     DomeMappingReflectionBounces = 2,
     MoveToRefreshInterval = 0.15,
     UseRaycastJumpAnalysis = true,
-    JumpCheckInterval = 0.08,
-    MinJumpCheckDistance = 3,
+    JumpCheckInterval = 0.04,
+    MinJumpCheckDistance = 1.5,
     LadderAssist = true,
     LadderScanRadius = 60,
     LadderScanRays = 36,
@@ -838,6 +838,16 @@ end
 local function CheckJumpRequired(currentPos, nextPos)
     local heightDiff = nextPos.Y - currentPos.Y
 
+    -- Fast height checks first (no raycasting needed)
+    if heightDiff > 4 then
+        return true, "high_jump"
+    end
+
+    -- Check for small height differences that still need a jump
+    if heightDiff > 1.5 then
+        return true, "normal"
+    end
+
     if HasRaycasting() and Config.UseRaycastJumpAnalysis and type(RaycastingVision.AnalyzeMovementSegment) == "function" then
         local ok, analysis = pcall(function()
             return RaycastingVision.AnalyzeMovementSegment(currentPos, nextPos)
@@ -858,16 +868,6 @@ local function CheckJumpRequired(currentPos, nextPos)
                 Log("Raycast detected hazard in movement segment", "WARN")
             end
         end
-    end
-
-    -- Immediate high jump detection
-    if heightDiff > 4 then
-        return true, "high_jump"
-    end
-
-    -- Check for small height differences that still need a jump
-    if heightDiff > 1.5 then
-        return true, "normal"
     end
 
     -- COMPREHENSIVE: Check EVERY stud from 1-10 and map ground/void
@@ -1280,7 +1280,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     if waypointIndex == 1 and not isFinalWaypoint then
         reachedDistance = Config.FirstWaypointReachedDistance
     end
-    local jumpExecuted = false
+    local lastJumpTime = 0
 
     if isFinalWaypoint then
         Log("Moving to FINAL waypoint " .. waypointIndex .. "/" .. totalWaypoints .. " (lenient: " .. reachedDistance .. " studs)", "INFO")
@@ -1311,7 +1311,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
         if needsJump then
             Log("⚡ Pre-check: Jump needed immediately! Type: " .. tostring(jumpType))
             ExecuteJump(jumpType)
-            jumpExecuted = true
+            lastJumpTime = tick()
         end
     end
 
@@ -1343,7 +1343,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             lastMoveToTime = tick()
         end
 
-        if tick() - lastProgressTime >= 0.9 then
+        if tick() - lastProgressTime >= 0.4 then
             humanoid:MoveTo(waypointPos)
             humanoid.Jump = true
             lastMoveToTime = tick()
@@ -1385,13 +1385,13 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
         end
 
         -- Continuous jump checking (execute in coroutine to not pause movement)
-        if Config.UseJumpOptimization and not jumpExecuted and distance >= Config.MinJumpCheckDistance then
+        if Config.UseJumpOptimization and distance >= Config.MinJumpCheckDistance then
             if tick() - lastJumpCheck >= Config.JumpCheckInterval then
                 local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
-                if needsJump then
+                if needsJump and tick() - lastJumpTime > 0.4 then
                     Log("⚡ Jump needed: " .. tostring(jumpType))
                     ExecuteJump(jumpType)
-                    jumpExecuted = true
+                    lastJumpTime = tick()
                 end
                 lastJumpCheck = tick()
             end
@@ -1917,3 +1917,4 @@ Log("Features: Raycasting Vision Integration, Smart Navigation, 8 Recovery Metho
 Log("Total lines: ~1100 | Raycasting: " .. (RaycastingVision and "Connected" or "Awaiting connection"))
 
 return PathfindingModule
+
