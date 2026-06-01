@@ -191,9 +191,36 @@ source = source:gsub(
 )
 
 source = source:gsub(
-	'local loadSuccess, module = pcall%(loadstring%(response%)%)',
+	'local function LoadModule%(moduleName%)%s*[%s%S]-local function GetModule',
 	function()
-		return [[local loader, compileErr = loadstring(response)
+		return [[local function LoadModule(moduleName)
+   if not ModuleURLs[moduleName] then
+      warn("LoadModule - Unknown module:", moduleName)
+      return nil
+   end
+
+   print("========== LOADING MODULE ==========")
+   print("Module:", moduleName)
+   print("URL:", ModuleURLs[moduleName])
+
+   local url = ModuleURLs[moduleName]
+   local success, response = customHttpRequest(url, "GET", {}, nil)
+
+   if not success then
+      warn("LoadModule - HTTP failed:", tostring(response))
+      print("====================================")
+      return nil
+   end
+
+   if type(response) ~= "string" or #response < 100 then
+      warn("LoadModule - Invalid response (too short or wrong type)")
+      print("====================================")
+      return nil
+   end
+
+   print("Response received:", #response, "characters")
+
+   local loader, compileErr = loadstring(response)
 
    if not loader then
       warn("LoadModule - Compile failed:", tostring(compileErr))
@@ -207,7 +234,22 @@ source = source:gsub(
       warn("LoadModule - Runtime failed:", tostring(module))
       print("====================================")
       return nil
-   end]]
+   end
+
+   if type(module) ~= "table" then
+      warn("LoadModule - Module didn't return a table")
+      print("====================================")
+      return nil
+   end
+
+   print("Module loaded successfully!")
+   print("Module version:", module.Version or "Unknown")
+   print("====================================")
+
+   return module
+end
+
+local function GetModule]]
 	end,
 	1
 )
@@ -223,7 +265,7 @@ source = source:gsub(
 source = source:gsub(
 	'Pathfinding = "https://raw%.githubusercontent%.com/Essencor/roblox%-ai%-modules/main/pathfinding%-module"',
 	function()
-		return 'Pathfinding = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/main/pathfinding-module",\n   Raycasting = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/main/raycasting_vision-module"'
+		return 'Pathfinding = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/refs/heads/main/pathfinding-module",\n   Raycasting = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/refs/heads/main/raycasting_vision-module"'
 	end,
 	1
 )
