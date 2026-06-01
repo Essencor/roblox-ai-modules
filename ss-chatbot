@@ -6,6 +6,35 @@ print("[SS Chatbot] loader v37 started")
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local DEFAULT_OPENROUTER_KEY = "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"
 
+local function patchNumericLoadstringChunks()
+	if type(loadstring) ~= "function" then
+		return
+	end
+
+	local env = (getgenv and getgenv()) or _G
+	if env.__SSChatbotNumericLoadstringPatched then
+		return
+	end
+
+	local originalLoadstring = loadstring
+	local function guardedLoadstring(source, chunkName)
+		if type(source) == "string" and source:match("^%s*%d+%s*$") then
+			return function()
+				return nil
+			end
+		end
+
+		return originalLoadstring(source, chunkName)
+	end
+
+	env.loadstring = guardedLoadstring
+	_G.loadstring = guardedLoadstring
+	env.__SSChatbotNumericLoadstringPatched = true
+	print("[SS Chatbot] patched numeric loadstring chunks")
+end
+
+pcall(patchNumericLoadstringChunks)
+
 local function patchEasySpriteSingleCellRange()
 	local okService, ReplicatedStorage = pcall(function()
 		return game:GetService("ReplicatedStorage")
