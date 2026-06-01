@@ -39,27 +39,27 @@ local Config = {
     
     -- Performance
     CacheTimeout = 0.3,            -- Reduced from 0.5 for more frequent updates
-    MaxRaysPerFrame = 35,          -- Increased from 20
+    MaxRaysPerFrame = 60,          -- Higher budget for full reflection coverage
     UpdateInterval = 0.15,         -- Reduced from 0.2 for faster updates
     
     -- Background dome mapping
     DomeMappingEnabled = true,
-    DomeScanRadius = 35,
+    DomeScanRadius = 80,
     DomeHorizontalSteps = 36,
     DomeVerticalSteps = 9,
     DomePitchMin = -75,
     DomePitchMax = 80,
-    DomeRaysPerStep = 5,
+    DomeRaysPerStep = 8,
     DomeStepWait = 0.03,
     DomeMapCellSize = 6,
-    DomeMapEntryTTL = 25,
-    DomeMapMaxEntries = 900,
+    DomeMapEntryTTL = 60,           -- Keep mapped cells for 60s
+    DomeMapMaxEntries = 3000,       -- Larger map budget for full maze coverage
 
     -- Reflection mapping
     ReflectionMappingEnabled = true,
-    ReflectionBounceCount = 2,
-    ReflectionDistance = 20,
-    ReflectionEveryNRays = 2,
+    ReflectionBounceCount = 5,      -- More bounces = more corners explored
+    ReflectionDistance = 80,        -- Long enough to travel full hallway segments
+    ReflectionEveryNRays = 1,       -- Every ray gets reflections (full maze coverage)
     ReflectionSurfaceOffset = 0.15,
     ReflectionColor = Color3.new(1, 0.85, 0),
 
