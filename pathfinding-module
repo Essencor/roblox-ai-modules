@@ -40,7 +40,7 @@ local Config = {
     MaxDeathZones = 50,
     WaypointReachedDistance = 2.75,
     FirstWaypointReachedDistance = 4,
-    FinalWaypointDistance = 1.5,     -- Final destination must be accurate
+    FinalWaypointDistance = 3.5,     -- Final destination arrival threshold
     ShowPath = false,
     ShowWaypoints = false,
     PathColor = Color3.new(0, 1, 0),
@@ -1379,7 +1379,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
 
         -- Check if reached (STRICT)
         if distance <= reachedDistance then
-            if ConfirmWaypointArrival(waypointPos, reachedDistance, navigationId, isFinalWaypoint and 0.5 or 0.12) then
+            if ConfirmWaypointArrival(waypointPos, reachedDistance, navigationId, isFinalWaypoint and 0.2 or 0.12) then
                 reached = true
                 State.lastSuccessfulWaypoint = currentPos
 
@@ -1615,8 +1615,11 @@ local function FollowPath(pathData, navigationId)
 
     local rootPart = GetRootPart()
     local endPos = State.targetPosition
-    if rootPart and endPos and GetDistance(rootPart.Position, endPos) > Config.FinalWaypointDistance then
-        Log("❌ Path finished but final target was not actually reached", "ERROR")
+    -- Use a generous threshold here — PathfindingService's last waypoint may be
+    -- a few studs from the actual target (e.g. if the target is inside geometry).
+    -- The strict distance check in Navigate() will catch truly bad arrivals.
+    if rootPart and endPos and GetDistance(rootPart.Position, endPos) > 6 then
+        Log("❌ Path finished but still " .. math.floor(GetDistance(rootPart.Position, endPos)) .. " studs from target", "ERROR")
         return false
     end
 
