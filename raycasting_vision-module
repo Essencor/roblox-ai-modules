@@ -44,11 +44,11 @@ local Config = {
     
     -- Background dome mapping
     DomeMappingEnabled = true,
-    DomeScanRadius = 80,
+    DomeScanRadius = 400,
     DomeHorizontalSteps = 36,
     DomeVerticalSteps = 9,
-    DomePitchMin = -75,
-    DomePitchMax = 80,
+    DomePitchMin = -15,
+    DomePitchMax = 15,
     DomeRaysPerStep = 8,
     DomeStepWait = 0.03,
     DomeMapCellSize = 6,
@@ -57,8 +57,8 @@ local Config = {
 
     -- Reflection mapping
     ReflectionMappingEnabled = true,
-    ReflectionBounceCount = 5,      -- More bounces = more corners explored
-    ReflectionDistance = 80,        -- Long enough to travel full hallway segments
+    ReflectionBounceCount = 8,      -- More bounces = more corners explored
+    ReflectionDistance = 300,       -- Long enough to traverse full maze corridors
     ReflectionEveryNRays = 1,       -- Every ray gets reflections (full maze coverage)
     ReflectionSurfaceOffset = 0.15,
     ReflectionColor = Color3.new(1, 0.85, 0),
@@ -765,6 +765,14 @@ local function TraceDomeRay(origin, direction, shouldReflect)
         return castsUsed
     end
 
+    -- Only reflect off walls (vertical normals) not floors/ceilings.
+    -- Floor/ceiling hits have a high Y component on their normal; reflecting
+    -- off them just sends the ray bouncing vertically and it never travels
+    -- far horizontally down corridors.
+    if math.abs(result.Normal.Y) > 0.7 then
+        return castsUsed
+    end
+
     local bounceOrigin = result.Position + (result.Normal * Config.ReflectionSurfaceOffset)
     local bounceDirection = ReflectDirection(direction, result.Normal)
 
@@ -785,6 +793,13 @@ local function TraceDomeRay(origin, direction, shouldReflect)
         end
 
         if not bounceResult then
+            -- Ray traveled full ReflectionDistance without hitting anything
+            -- (open corridor end) — nothing more to bounce off, stop here.
+            break
+        end
+
+        -- Skip reflecting off floors/ceilings mid-bounce too
+        if math.abs(bounceResult.Normal.Y) > 0.7 then
             break
         end
 
