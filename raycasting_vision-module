@@ -78,12 +78,6 @@ local Config = {
     NoclipVisualize3DUpdateInterval = 1.0,
     NoclipVisualize3DSize = 0.35,
     NoclipInfiniteZoom = false,    -- Remove zoom clamp when enabled
-    NoclipZoomMin = 0.05,
-    NoclipZoomMax = 20,
-    NoclipInfiniteZoomMin = 0.00001,
-    NoclipInfiniteZoomMax = 100000,
-    NoclipMapDotMinPixels = 1,
-    NoclipMapDotMaxPixels = 18,
 
     -- Reflection mapping
     ReflectionMappingEnabled = true,
@@ -148,6 +142,8 @@ local State = {
     -- Unified map (combines dome + reflection + noclip data)
     unifiedMap = {},
     unifiedMapOrder = {},
+    -- Free-space map: cells the noclip rays traveled THROUGH (confirmed open)
+    freeMap = {},
     -- 3D visualizer
     noclip3DPartPool = {},
     noclipLast3DUpdate = 0
@@ -1116,6 +1112,27 @@ local function StoreNoclipCell(position, normal, instance, material)
     StoreUnifiedCell(position, "noclip", normal, instance)
 end
 
+-- Mark a grid cell as confirmed free/open (ray passed through it).
+-- This gives Dijkstra a "known corridor" map to prefer when routing.
+local FREE_MAP_MAX = 20000
+local function StoreFreeCell(position)
+    local cs  = math.max(1, Config.NoclipCellSize)
+    local key = math.floor(position.X / cs) .. ","
+             .. math.floor(position.Y / cs) .. ","
+             .. math.floor(position.Z / cs)
+    -- Don't overwrite a wall cell with a free cell
+    if State.noclipMap[key] then return end
+    State.freeMap[key] = position
+    -- Simple cap — just overwrite oldest key by resetting when full
+    local count = 0
+    for _ in pairs(State.freeMap) do count = count + 1 end
+    if count > FREE_MAP_MAX then
+        -- Remove one arbitrary old entry
+        local oldKey = next(State.freeMap)
+        if oldKey then State.freeMap[oldKey] = nil end
+    end
+end
+
 local function PruneNoclipMap()
     local now = tick()
     local newOrder = {}
@@ -1159,6 +1176,15 @@ local function CastNoclipRay(origin, direction)
 
         local segDist = (result.Position - currentOrigin).Magnitude
         totalTraveled = totalTraveled + segDist
+
+        -- Sample confirmed-free cells along the ray segment before the wall.
+        -- Step every NoclipCellSize studs so we get one sample per grid cell.
+        local cellStep = math.max(1, Config.NoclipCellSize)
+        local steps    = math.floor(segDist / cellStep)
+        for s = 1, steps - 1 do   -- exclude the endpoint (that's the wall)
+            local samplePos = currentOrigin + direction * (s * cellStep)
+            StoreFreeCell(samplePos)
+        end
 
         -- Store ALL hits (floors, below-torso, everything).
         -- Filtering happens at render time: the 2D minimap hides floor/
@@ -1370,15 +1396,7 @@ local function CreateNoclipMapGui()
     local panStartZ      = 0
 
     local function effectiveViewR()
-        return Config.NoclipMapViewRadius / math.max(zoom, Config.NoclipInfiniteZoomMin)
-    end
-
-    local function clampZoom(value)
-        if Config.NoclipInfiniteZoom then
-            return math.clamp(value, Config.NoclipInfiniteZoomMin, Config.NoclipInfiniteZoomMax)
-        end
-
-        return math.clamp(value, Config.NoclipZoomMin, Config.NoclipZoomMax)
+        return Config.NoclipMapViewRadius / zoom
     end
 
     canvas.InputBegan:Connect(function(inp)
@@ -1401,7 +1419,11 @@ local function CreateNoclipMapGui()
             and mpos.Y >= cpos.Y and mpos.Y <= cpos.Y + csz.Y then
                 local delta = inp.Position.Z  -- +1 = scroll up = zoom in
                 local newZoom = zoom * (delta > 0 and 1.25 or 0.8)
-                zoom = clampZoom(newZoom)
+                if Config.NoclipInfiniteZoom then
+                    zoom = math.max(0.000001, newZoom)
+                else
+                    zoom = math.clamp(newZoom, 0.05, 20)
+                end
                 State.noclipLastMapUpdate = 0
             end
         end
@@ -1516,7 +1538,6 @@ local function CreateNoclipMapGui()
         getPanX      = function() return panX end,
         getPanZ      = function() return panZ end,
         getZoom      = function() return zoom end,
-        setZoom      = function(value) zoom = clampZoom(value) end,
     }
     State.noclipPixelPool = {}
 end
@@ -1545,14 +1566,12 @@ local function UpdateNoclipMapDisplay()
     local zoom     = gui.getZoom and gui.getZoom() or 1.0
     local panX     = gui.getPanX and gui.getPanX() or 0
     local panZ     = gui.getPanZ and gui.getPanZ() or 0
-    local viewR    = Config.NoclipMapViewRadius / math.max(zoom, Config.NoclipInfiniteZoomMin)   -- effective radius
+    local viewR    = Config.NoclipMapViewRadius / zoom   -- effective radius
     local centerX  = charPos.X + panX
     local centerZ  = charPos.Z + panZ
 
-    -- Dot size scales with zoom but keeps at least a real pixel visible.
-    local canvasSize = canvas.AbsoluteSize
-    local dotPixels = (cellSize / (viewR * 2)) * math.max(canvasSize.X, canvasSize.Y, 1)
-    dotPixels = math.clamp(dotPixels, Config.NoclipMapDotMinPixels, Config.NoclipMapDotMaxPixels)
+    -- Dot size scales with zoom (smaller viewR = bigger dots)
+    local dotScale = cellSize / (viewR * 2)
 
     -- Update character dot position to reflect pan (may be off-centre when panned)
     local charDot = canvas:FindFirstChild("CharDot")
@@ -1607,7 +1626,7 @@ local function UpdateNoclipMapDisplay()
             dot.Parent          = canvas
             State.noclipPixelPool[i] = dot
         end
-        dot.Size             = UDim2.new(0, dotPixels, 0, dotPixels)
+        dot.Size             = UDim2.new(dotScale, 0, dotScale, 0)
         dot.Position         = UDim2.new(cell.sx, 0, cell.sy, 0)
         dot.BackgroundColor3 = cell.color
         dot.Visible          = true
@@ -1696,6 +1715,11 @@ function RaycastingVision.SetNoclipVisualize3D(enabled)
     Log("Noclip 3D visualizer: " .. (enabled and "ON" or "OFF"), "INFO")
 end
 
+function RaycastingVision.SetNoclipInfiniteZoom(enabled)
+    Config.NoclipInfiniteZoom = enabled
+    Log("Noclip infinite zoom: " .. (enabled and "ENABLED" or "DISABLED"), "INFO")
+end
+
 function RaycastingVision.SetNoclipVisualizeShape(enabled)
     Config.NoclipVisualizeShape = enabled
     if enabled then
@@ -1709,19 +1733,6 @@ function RaycastingVision.SetNoclipVisualizeShape(enabled)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
-
-function RaycastingVision.SetNoclipInfiniteZoom(enabled)
-    Config.NoclipInfiniteZoom = enabled
-
-    if State.noclipMapGui and State.noclipMapGui.setZoom then
-        local currentZoom = State.noclipMapGui.getZoom and State.noclipMapGui.getZoom() or 1
-        State.noclipMapGui.setZoom(currentZoom)
-    end
-
-    State.noclipLastMapUpdate = 0
-    Log("Noclip infinite zoom: " .. (enabled and "ON" or "OFF"), "INFO")
-    return true
-end
 
 function RaycastingVision.StartNoclipMapping()
     if not Config.NoclipEnabled then return false end
@@ -1774,6 +1785,7 @@ end
 function RaycastingVision.ClearNoclipMap()
     State.noclipMap      = {}
     State.noclipMapOrder = {}
+    State.freeMap        = {}
     State.noclipRayIndex = 0
     Log("Noclip map cleared", "INFO")
 end
@@ -1796,6 +1808,13 @@ function RaycastingVision.GetNoclipPath(startPos, endPos, maxNodes)
     end
     local function isSolid(c)
         return State.noclipMap[cellKey(c)] ~= nil
+    end
+    -- Cost to enter a cell: 1 if confirmed free, 5 if unknown, inf if solid
+    local function moveCost(c)
+        local k = cellKey(c)
+        if State.noclipMap[k] then return math.huge end  -- wall
+        if State.freeMap[k]   then return 1            end  -- confirmed open
+        return 5                                            -- unknown
     end
 
     local sCell = posToCell(startPos)
@@ -1843,8 +1862,9 @@ function RaycastingVision.GetNoclipPath(startPos, endPos, maxNodes)
             for _, off in ipairs(offsets) do
                 local nb  = {x = cur.cell.x + off[1], y = cur.cell.y + off[2], z = cur.cell.z + off[3]}
                 local nKey = cellKey(nb)
-                if not visited[nKey] and not isSolid(nb) then
-                    local nd = (dist[cur.key] or math.huge) + 1
+                local cost = moveCost(nb)
+                if not visited[nKey] and cost < math.huge then
+                    local nd = (dist[cur.key] or math.huge) + cost
                     if nd < (dist[nKey] or math.huge) then
                         dist[nKey]   = nd
                         prev[nKey]   = cur.key
@@ -2446,8 +2466,16 @@ function RaycastingVision.SetConfig(key, value)
         Config[key] = value
         Log("Config updated: " .. key .. " = " .. tostring(value))
         return true
+    else
+        -- Allow setting new keys
+        Config[key] = value
+        Log("Config set (new key): " .. key .. " = " .. tostring(value))
+        return true
     end
-    return false
+end
+
+function RaycastingVision.GetConfigValue(key)
+    return Config[key]
 end
 
 function RaycastingVision.GetConfig()
