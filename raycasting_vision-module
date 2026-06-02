@@ -57,7 +57,7 @@ local Config = {
 
     -- Noclip sphere mapping (wall-penetrating)
     NoclipEnabled = true,
-    NoclipSphereRays = 300,        -- Fibonacci sphere ray count (more = better spatial coverage)
+    NoclipSphereRays = 600,        -- Fibonacci sphere ray count (more = better spatial coverage)
     NoclipMaxDistance = 1000,      -- Max distance each noclip ray travels
     NoclipCellSize = 4,            -- Grid cell size for spatial map (studs)
     NoclipCellTTL = 120,           -- How long a mapped cell persists (seconds)
@@ -69,7 +69,7 @@ local Config = {
     NoclipVisualizeShape = false,  -- Show noclip map minimap in bottom-right corner
     NoclipMapDisplaySize = 220,    -- Minimap pixel size (square)
     NoclipMapViewRadius = 250,     -- Studs shown around character in minimap
-    NoclipMapUpdateInterval = 0.4, -- Seconds between minimap refreshes
+    NoclipMapUpdateInterval = 0.8, -- Seconds between minimap refreshes
     NoclipTorsoFilterOffset = 2,   -- Ignore hits more than N studs below the ray origin (filters floor)
     -- 3D visualizer
     NoclipVisualize3D = false,
@@ -677,7 +677,7 @@ local UNIFIED_SOURCE_COLOR = {
     dome       = Color3.new(0, 1, 1),      -- cyan
     reflection = Color3.new(1, 0.85, 0),   -- yellow
 }
-local UNIFIED_MAX = 20000
+local UNIFIED_MAX = 6000
 
 local function StoreUnifiedCell(position, source, normal, instance)
     local cs  = math.max(1, Config.NoclipCellSize)
@@ -1307,7 +1307,7 @@ local function CreateNoclipMapGui()
     -- ── Title bar (also acts as drag handle) ─────────────────────────────────
     local titleBar = Instance.new("TextButton")
     titleBar.Name               = "TitleBar"
-    titleBar.Size               = UDim2.new(1, -34, 0, titleH)
+    titleBar.Size               = UDim2.new(1, -76, 0, titleH)  -- room for 2 buttons
     titleBar.Position           = UDim2.new(0, 0, 0, 0)
     titleBar.BackgroundTransparency = 1
     titleBar.Text               = "Noclip Shape Map"
@@ -1368,6 +1368,13 @@ local function CreateNoclipMapGui()
     canvas.BorderSizePixel  = 0
     canvas.ClipsDescendants = true
     canvas.Parent           = panel
+
+    -- Force canvas to always be a square (prevents fullscreen distortion)
+    local canvasAspect = Instance.new("UIAspectRatioConstraint")
+    canvasAspect.AspectRatio  = 1
+    canvasAspect.AspectType   = Enum.AspectType.FitWithinMaxSize
+    canvasAspect.DominantAxis = Enum.DominantAxis.Height
+    canvasAspect.Parent       = canvas
 
     -- ── Character dot — always at canvas centre, always on top ──────────────
     local charDot = Instance.new("Frame")
@@ -1503,19 +1510,26 @@ local function CreateNoclipMapGui()
 
     local function applyLayout()
         if isFullscreen then
-            panel.AnchorPoint = Vector2.new(0, 0)
-            panel.Size        = UDim2.new(1, -24, 1, -24)
-            panel.Position    = UDim2.new(0, 12, 0, 12)
-            canvas.Size       = UDim2.new(1, -pad*2, 1, -titleH - pad)
-            fsBtn.Text        = "[X]"
-            titleBar.Text     = "Noclip Shape Map (fullscreen — drag disabled)"
+            -- Panel fills almost the whole screen
+            panel.AnchorPoint = Vector2.new(0.5, 0.5)
+            panel.Size        = UDim2.new(1, -40, 1, -40)
+            panel.Position    = UDim2.new(0.5, 0, 0.5, 0)
+            -- Canvas: centered square — UIAspectRatioConstraint keeps it 1:1
+            -- Give it max size; the constraint trims it to a square automatically
+            canvas.AnchorPoint = Vector2.new(0.5, 0.5)
+            canvas.Size        = UDim2.new(1, -pad*2, 1, -titleH*2 - pad)
+            canvas.Position    = UDim2.new(0.5, 0, 0.5, titleH / 2)
+            fsBtn.Text         = "[X]"
+            titleBar.Text      = "Noclip Shape Map  (drag title to close-out)"
         else
             panel.AnchorPoint = Vector2.new(1, 1)
             panel.Size        = miniSize
             panel.Position    = miniPos
-            canvas.Size       = UDim2.new(0, ds, 0, ds)
-            fsBtn.Text        = "[ ]"
-            titleBar.Text     = "Noclip Shape Map"
+            canvas.AnchorPoint = Vector2.new(0, 0)
+            canvas.Size        = UDim2.new(0, ds, 0, ds)
+            canvas.Position    = UDim2.new(0, pad, 0, titleH)
+            fsBtn.Text         = "[ ]"
+            titleBar.Text      = "Noclip Shape Map"
         end
         State.noclipLastMapUpdate = 0
     end
@@ -1557,65 +1571,67 @@ local function UpdateNoclipMapDisplay()
     local rootPart = GetRootPart()
     if not rootPart then return end
 
-    local gui      = State.noclipMapGui
-    local canvas   = gui.canvas
-    local cellSize = math.max(1, Config.NoclipCellSize)
-    local charPos  = rootPart.Position
+    local gui        = State.noclipMapGui
+    local canvas     = gui.canvas
+    local charPos    = rootPart.Position
+    local fullscreen = gui.isFullscreen and gui.isFullscreen()
 
     -- Apply pan and zoom
-    local zoom     = gui.getZoom and gui.getZoom() or 1.0
-    local panX     = gui.getPanX and gui.getPanX() or 0
-    local panZ     = gui.getPanZ and gui.getPanZ() or 0
-    local viewR    = Config.NoclipMapViewRadius / zoom   -- effective radius
-    local centerX  = charPos.X + panX
-    local centerZ  = charPos.Z + panZ
+    local zoom    = gui.getZoom and gui.getZoom() or 1.0
+    local panX    = gui.getPanX and gui.getPanX() or 0
+    local panZ    = gui.getPanZ and gui.getPanZ() or 0
+    local viewR   = Config.NoclipMapViewRadius / zoom
+    local centerX = charPos.X + panX
+    local centerZ = charPos.Z + panZ
 
-    -- Dot size scales with zoom (smaller viewR = bigger dots)
-    local dotScale = cellSize / (viewR * 2)
+    -- Fixed pixel dot size regardless of canvas resolution
+    -- Scale positions keep dots in the right place; pixel size keeps them readable
+    local DOT_PX   = fullscreen and 4 or 3
+    local MAX_DOTS = fullscreen and 500 or 350
 
-    -- Update character dot position to reflect pan (may be off-centre when panned)
+    -- Update character dot position to reflect pan
     local charDot = canvas:FindFirstChild("CharDot")
     if charDot then
-        local charSx = (-panX / viewR + 1) * 0.5
-        local charSy = (-panZ / viewR + 1) * 0.5
-        charDot.Position = UDim2.new(charSx, 0, charSy, 0)
+        charDot.Position = UDim2.new((-panX / viewR + 1) * 0.5, 0, (-panZ / viewR + 1) * 0.5, 0)
     end
 
-    -- Find the part the character's feet are touching right now
+    -- Ground-part filter (hides the floor under the character's feet)
     local groundPart = nil
-    local groundParams = RaycastParams.new()
-    groundParams.FilterType = Enum.RaycastFilterType.Exclude
-    local char = GetCharacter()
-    if char then groundParams.FilterDescendantsInstances = {char} end
-    local groundHit = workspace:Raycast(charPos, Vector3.new(0, -6, 0), groundParams)
-    if groundHit then groundPart = groundHit.Instance end
+    do
+        local gp = RaycastParams.new()
+        gp.FilterType = Enum.RaycastFilterType.Exclude
+        local ch = GetCharacter()
+        if ch then gp.FilterDescendantsInstances = {ch} end
+        local gh = workspace:Raycast(charPos, Vector3.new(0, -6, 0), gp)
+        if gh then groundPart = gh.Instance end
+    end
 
-    -- Hide a dot if EITHER:
-    --   1. It hit the specific part the character is standing on (catches the exact floor tile)
-    --   2. Its surface normal points mostly up/down (catches all other floor/ceiling tiles)
+    -- Collect visible dots, capped at MAX_DOTS to prevent lag
     local visible = {}
     for _, entry in pairs(State.unifiedMap) do
+        if #visible >= MAX_DOTS then break end
         local pos = entry.position
         local dx  = pos.X - centerX
         local dz  = pos.Z - centerZ
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
-            local isFloorTile    = groundPart and entry.instance == groundPart
-            local isHorizSurface = entry.normal and math.abs(entry.normal.Y) > 0.6
-            if not isFloorTile and not isHorizSurface then
-                local sx = (dx / viewR + 1) * 0.5
-                local sy = (dz / viewR + 1) * 0.5
-                table.insert(visible, {sx = sx, sy = sy, color = entry.color})
+            local isFloor = (groundPart and entry.instance == groundPart)
+                         or (entry.normal and math.abs(entry.normal.Y) > 0.6)
+            if not isFloor then
+                table.insert(visible, {
+                    sx    = (dx / viewR + 1) * 0.5,
+                    sy    = (dz / viewR + 1) * 0.5,
+                    color = entry.color,
+                })
             end
         end
     end
 
-    -- Hide all pooled pixels first
-    for _, dot in ipairs(State.noclipPixelPool) do
-        dot.Visible = false
+    -- Hide surplus pool frames
+    for i = #visible + 1, #State.noclipPixelPool do
+        State.noclipPixelPool[i].Visible = false
     end
 
-    -- Reuse / grow pixel pool — use Scale UDim2 so position is correct at
-    -- any canvas size (minimap OR fullscreen) without reading AbsoluteSize
+    -- Reuse / grow pool (positions are Scale-based; size is fixed pixels)
     for i, cell in ipairs(visible) do
         local dot = State.noclipPixelPool[i]
         if not dot then
@@ -1626,7 +1642,7 @@ local function UpdateNoclipMapDisplay()
             dot.Parent          = canvas
             State.noclipPixelPool[i] = dot
         end
-        dot.Size             = UDim2.new(dotScale, 0, dotScale, 0)
+        dot.Size             = UDim2.new(0, DOT_PX, 0, DOT_PX)
         dot.Position         = UDim2.new(cell.sx, 0, cell.sy, 0)
         dot.BackgroundColor3 = cell.color
         dot.Visible          = true
