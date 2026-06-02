@@ -1437,14 +1437,14 @@ local function UpdateNoclipMapDisplay()
     -- cellSize studs / (viewR*2 studs total) = fraction of canvas per cell
     local dotScale = cellSize / (viewR * 2)
 
-    -- 2D filter: show only a vertical "slice" at the character's current height.
-    -- This is always relative to charPos.Y, so it works correctly whether the
-    -- character is at ground level or elevated on a platform.
-    --   minY = 1 stud below HRP  (filters the floor which sits ~3 studs below HRP)
-    --   maxY = 8 studs above HRP (shows walls up to roughly ceiling height)
-    local minY = charPos.Y - 1
-    local maxY = charPos.Y + 8
-    local visible = {}
+    -- XZ deduplication: one dot per XZ column, keeping only the hit whose Y is
+    -- closest to eye/chest height. This ensures each wall segment shows as exactly
+    -- one pixel regardless of how many Y-slices the Fibonacci sphere recorded for
+    -- that wall, eliminating the dense-overlap that looks like floor data.
+    local targetY = charPos.Y + 2   -- chest/eye level
+    local cs      = math.max(1, Config.NoclipCellSize)
+    local xzBest  = {}              -- xzKey -> {sx, sy, color, dist}
+
     for _, entry in pairs(State.unifiedMap) do
         local pos = entry.position
         local dx  = pos.X - charPos.X
@@ -1452,16 +1452,27 @@ local function UpdateNoclipMapDisplay()
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
             local n      = entry.normal
             local isCeil = n and math.abs(n.Y) > 0.6   -- skip floor/ceiling surfaces
-            local isLow  = pos.Y < minY                 -- below the slice
-            local isHigh = pos.Y > maxY                 -- above the slice
+            local isLow  = pos.Y < charPos.Y - 1        -- below foot level
+            local isHigh = pos.Y > charPos.Y + 8        -- above ceiling
             if not isCeil and not isLow and not isHigh then
-                -- Map world offset to 0..1 canvas scale
-                -- dx=0 → 0.5 (centre), dx=-viewR → 0.0 (left), dx=+viewR → 1.0 (right)
-                local sx = (dx / viewR + 1) * 0.5
-                local sy = (dz / viewR + 1) * 0.5
-                table.insert(visible, {sx = sx, sy = sy, color = entry.color})
+                local xzKey = math.floor(pos.X / cs) .. "," .. math.floor(pos.Z / cs)
+                local dist  = math.abs(pos.Y - targetY)
+                local prev  = xzBest[xzKey]
+                if not prev or dist < prev.dist then
+                    xzBest[xzKey] = {
+                        sx    = (dx / viewR + 1) * 0.5,
+                        sy    = (dz / viewR + 1) * 0.5,
+                        color = entry.color,
+                        dist  = dist,
+                    }
+                end
             end
         end
+    end
+
+    local visible = {}
+    for _, cell in pairs(xzBest) do
+        table.insert(visible, cell)
     end
 
     -- Hide all pooled pixels first
