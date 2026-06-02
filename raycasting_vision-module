@@ -45,27 +45,27 @@ local Config = {
     -- Background dome mapping
     DomeMappingEnabled = true,
     DomeScanRadius = 500,
-    DomeHorizontalSteps = 65,       -- Horizontal sweep steps
-    DomeVerticalSteps = 8,
+    DomeHorizontalSteps = 36,       -- Horizontal sweep steps
+    DomeVerticalSteps = 5,
     DomePitchMin = -15,
     DomePitchMax = 15,
-    DomeRaysPerStep = 28,           -- Rays processed per background tick
-    DomeStepWait = 0.01,            -- Throttle between ticks
+    DomeRaysPerStep = 6,            -- Rays processed per background tick
+    DomeStepWait = 0.05,            -- Throttle between ticks
     DomeMapCellSize = 6,
     DomeMapEntryTTL = 60,           -- Keep mapped cells for 60s
     DomeMapMaxEntries = 5000,       -- Huge map for entire maze exploration
 
     -- Noclip sphere mapping (wall-penetrating)
     NoclipEnabled = true,
-    NoclipSphereRays = 540,        -- Fibonacci sphere ray count
+    NoclipSphereRays = 200,        -- Fibonacci sphere ray count
     NoclipMaxDistance = 900,       -- Max distance each noclip ray travels
     NoclipCellSize = 4,            -- Grid cell size for spatial map (studs)
     NoclipCellTTL = 120,           -- How long a mapped cell persists (seconds)
     NoclipMaxCells = 10000,        -- Max cells in the noclip map
     NoclipColor = Color3.new(0.7, 0, 1),  -- Purple visualization
-    NoclipRaysPerStep = 7,         -- Rays cast per background tick
-    NoclipStepWait = 0.05,         -- Seconds between background steps
-    NoclipMaxHitsPerRay = 54,      -- Max wall penetrations per single ray
+    NoclipRaysPerStep = 4,         -- Rays cast per background tick
+    NoclipStepWait = 0.1,          -- Seconds between background steps
+    NoclipMaxHitsPerRay = 12,      -- Max wall penetrations per single ray
     NoclipVisualizeShape = false,  -- Show noclip map minimap in bottom-right corner
     NoclipMapDisplaySize = 220,    -- Minimap pixel size (square)
     NoclipMapViewRadius = 250,     -- Studs shown around character in minimap
@@ -81,9 +81,9 @@ local Config = {
 
     -- Reflection mapping
     ReflectionMappingEnabled = true,
-    ReflectionBounceCount = 11,     -- Bounces per reflection ray
+    ReflectionBounceCount = 4,      -- Bounces per reflection ray
     ReflectionDistance = 450,       -- Max distance per bounce
-    ReflectionEveryNRays = 1,       -- Every ray gets reflections
+    ReflectionEveryNRays = 3,       -- Reflect every 3rd ray (not every ray)
     ReflectionSurfaceOffset = 0.15,
     ReflectionColor = Color3.new(1, 0.85, 0),
 
