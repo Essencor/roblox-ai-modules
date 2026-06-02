@@ -105,6 +105,9 @@ local Config = {
 
     -- Visualization
     ShowRays = false,
+    RayVisualizeEveryN  = 6,    -- show 1 in every N rays (reduce visual clutter)
+    RayVisualLifetime   = 0.3,  -- seconds before a ray visual fades
+    RayPoolSize         = 120,  -- pre-allocated Part pool (ring buffer)
     ShowObstacles = false,
     ShowSafeZones = false,
     RayColor = Color3.new(0, 1, 1),
@@ -209,33 +212,53 @@ local function ClearVisualizations()
     State.visualizations = {}
 end
 
+-- ── Ray-visual ring-buffer pool ──────────────────────────────────────────────
+-- Parts are never created/destroyed during play — just repositioned.
+-- The ring buffer naturally reclaims old rays as new ones are written.
+local RayPool       = {}   -- array of pooled Parts
+local rayPoolIndex  = 0    -- current write head
+local rayVisCounter = 0    -- throttle counter
+
+local function GetPooledRayPart()
+    local size = Config.RayPoolSize
+    rayPoolIndex = (rayPoolIndex % size) + 1
+    local part = RayPool[rayPoolIndex]
+    if not part or not part.Parent then
+        part              = Instance.new("Part")
+        part.Anchored     = true
+        part.CanCollide   = false
+        part.CanQuery     = false
+        part.CanTouch     = false
+        part.CastShadow   = false
+        part.Material     = Enum.Material.Neon
+        part.Transparency = 1
+        part.Parent       = workspace
+        RayPool[rayPoolIndex] = part
+    end
+    return part
+end
+
 local function VisualizeRay(origin, direction, distance, hit, color)
     if not Config.ShowRays then return end
-    
-    local endPos = origin + (direction * distance)
-    if hit then
-        endPos = hit.Position
-    end
-    
-    local rayLength = (endPos - origin).Magnitude
-    local midpoint = (origin + endPos) / 2
-    
-    local part = Instance.new("Part")
-    part.Size = Vector3.new(0.1, 0.1, rayLength)
-    part.CFrame = CFrame.new(midpoint, endPos)
-    part.Anchored = true
-    part.CanCollide = false
-    part.Color = color or Config.RayColor
-    part.Material = Enum.Material.Neon
-    part.Transparency = 0.7
-    part.Parent = workspace
-    
-    table.insert(State.visualizations, part)
-    
-    task.delay(0.5, function()
-        if part and part.Parent then
-            part:Destroy()
-        end
+
+    -- Throttle: skip most rays to keep part count low
+    rayVisCounter = rayVisCounter + 1
+    if rayVisCounter % Config.RayVisualizeEveryN ~= 0 then return end
+
+    local endPos = hit and hit.Position or (origin + direction * distance)
+    local rayLen = (endPos - origin).Magnitude
+    if rayLen < 0.1 then return end
+
+    local part = GetPooledRayPart()
+    part.Size         = Vector3.new(0.07, 0.07, rayLen)
+    part.CFrame       = CFrame.new((origin + endPos) * 0.5, endPos)
+    part.Color        = color or Config.RayColor
+    part.Transparency = 0.55
+
+    -- Auto-hide after lifetime (ring buffer will overwrite it anyway)
+    local lifetime = Config.RayVisualLifetime
+    task.delay(lifetime, function()
+        if part and part.Parent then part.Transparency = 1 end
     end)
 end
 
@@ -1192,23 +1215,21 @@ local function CastNoclipRay(origin, direction)
         StoreNoclipCell(result.Position, result.Normal, result.Instance, result.Material)
         Stats.noclipHits = Stats.noclipHits + 1
 
-        -- Purple ray segment visualisation
+        -- Purple noclip ray visualisation — use shared pool, throttled
         if Config.ShowRays then
-            local rayLen = (result.Position - currentOrigin).Magnitude
-            if rayLen > 0.05 then
-                local mid  = (currentOrigin + result.Position) / 2
-                local part = Instance.new("Part")
-                part.Size        = Vector3.new(0.05, 0.05, rayLen)
-                part.CFrame      = CFrame.new(mid, result.Position)
-                part.Anchored    = true
-                part.CanCollide  = false
-                part.Color       = Config.NoclipColor
-                part.Material    = Enum.Material.Neon
-                part.Transparency = 0.5
-                part.Parent      = workspace
-                task.delay(1, function()
-                    if part and part.Parent then part:Destroy() end
-                end)
+            rayVisCounter = rayVisCounter + 1
+            if rayVisCounter % Config.RayVisualizeEveryN == 0 then
+                local rayLen = (result.Position - currentOrigin).Magnitude
+                if rayLen > 0.1 then
+                    local part = GetPooledRayPart()
+                    part.Size         = Vector3.new(0.05, 0.05, rayLen)
+                    part.CFrame       = CFrame.new((currentOrigin + result.Position) * 0.5, result.Position)
+                    part.Color        = Config.NoclipColor
+                    part.Transparency = 0.55
+                    task.delay(Config.RayVisualLifetime, function()
+                        if part and part.Parent then part.Transparency = 1 end
+                    end)
+                end
             end
         end
 
