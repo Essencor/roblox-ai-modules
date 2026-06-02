@@ -1437,6 +1437,21 @@ local function UpdateNoclipMapDisplay()
     -- cellSize studs / (viewR*2 studs total) = fraction of canvas per cell
     local dotScale = cellSize / (viewR * 2)
 
+    -- Find the Y of the ground the character is actually standing on.
+    -- Any map dot within 1 stud of that surface gets hidden — the user
+    -- literally said "the part your touching your feet, don't show it."
+    local groundY = -math.huge
+    do
+        local groundParams = RaycastParams.new()
+        groundParams.FilterType = Enum.RaycastFilterType.Exclude
+        local char = GetCharacter()
+        if char then groundParams.FilterDescendantsInstances = {char} end
+        local groundHit = workspace:Raycast(charPos, Vector3.new(0, -10, 0), groundParams)
+        if groundHit then
+            groundY = groundHit.Position.Y
+        end
+    end
+
     -- XZ deduplication: one dot per XZ column, keeping only the hit whose Y is
     -- closest to eye/chest height. This ensures each wall segment shows as exactly
     -- one pixel regardless of how many Y-slices the Fibonacci sphere recorded for
@@ -1451,10 +1466,11 @@ local function UpdateNoclipMapDisplay()
         local dz  = pos.Z - charPos.Z
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
             local n      = entry.normal
-            local isCeil = n and math.abs(n.Y) > 0.6   -- skip floor/ceiling surfaces
-            local isLow  = pos.Y < charPos.Y - 1        -- below foot level
-            local isHigh = pos.Y > charPos.Y + 8        -- above ceiling
-            if not isCeil and not isLow and not isHigh then
+            local isCeil    = n and math.abs(n.Y) > 0.6       -- skip floor/ceiling surfaces
+            local isLow     = pos.Y < charPos.Y - 1            -- below foot level
+            local isHigh    = pos.Y > charPos.Y + 8            -- above ceiling
+            local isGround  = pos.Y <= groundY + 1             -- within 1 stud of the actual floor
+            if not isCeil and not isLow and not isHigh and not isGround then
                 local xzKey = math.floor(pos.X / cs) .. "," .. math.floor(pos.Z / cs)
                 local dist  = math.abs(pos.Y - targetY)
                 local prev  = xzBest[xzKey]
