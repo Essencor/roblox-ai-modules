@@ -1080,9 +1080,13 @@ local function CastNoclipRay(origin, direction)
         local segDist = (result.Position - currentOrigin).Magnitude
         totalTraveled = totalTraveled + segDist
 
-        -- Record the solid hit in the spatial map
-        StoreNoclipCell(result.Position, result.Instance, result.Material)
-        Stats.noclipHits = Stats.noclipHits + 1
+        -- Skip floor/ceiling hits — their normals are mostly vertical.
+        -- Recording them makes every cell appear solid from above and ruins
+        -- the top-down shape map.
+        if math.abs(result.Normal.Y) <= 0.7 then
+            StoreNoclipCell(result.Position, result.Instance, result.Material)
+            Stats.noclipHits = Stats.noclipHits + 1
+        end
 
         -- Purple ray segment visualisation
         if Config.ShowRays then
@@ -1168,71 +1172,121 @@ local function CreateNoclipMapGui()
     local player = Players.LocalPlayer
     if not player then return end
 
-    local ds   = Config.NoclipMapDisplaySize   -- display px
-    local pad  = 8
+    local ds      = Config.NoclipMapDisplaySize
+    local pad     = 8
+    local titleH  = 24
+    local isFullscreen = false
 
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name             = "NoclipShapeDisplay"
-    screenGui.ResetOnSpawn     = false
-    screenGui.ZIndexBehavior   = Enum.ZIndexBehavior.Sibling
-    screenGui.IgnoreGuiInset   = true
-    screenGui.Parent           = player.PlayerGui
+    screenGui.Name           = "NoclipShapeDisplay"
+    screenGui.ResetOnSpawn   = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.IgnoreGuiInset = true
+    screenGui.Parent         = player.PlayerGui
 
-    -- Outer panel ─ bottom-right corner
+    -- ── Panel ────────────────────────────────────────────────────────────────
     local panel = Instance.new("Frame")
-    panel.Name                    = "Panel"
-    panel.Size                    = UDim2.new(0, ds + pad * 2, 0, ds + pad * 2 + 20)
-    panel.Position                = UDim2.new(1, -(ds + pad * 2 + 12),
-                                              1, -(ds + pad * 2 + 20 + 12))
-    panel.BackgroundColor3        = Color3.new(0, 0, 0)
-    panel.BackgroundTransparency  = 0.45
-    panel.BorderSizePixel         = 0
-    panel.Parent                  = screenGui
+    panel.Name                   = "Panel"
+    panel.Size                   = UDim2.new(0, ds + pad*2, 0, ds + pad*2 + titleH)
+    panel.Position               = UDim2.new(1, -(ds + pad*2 + 12), 1, -(ds + pad*2 + titleH + 12))
+    panel.BackgroundColor3       = Color3.new(0, 0, 0)
+    panel.BackgroundTransparency = 0.4
+    panel.BorderSizePixel        = 0
+    panel.Parent                 = screenGui
 
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 6)
-    corner.Parent = panel
+    local panelCorner = Instance.new("UICorner")
+    panelCorner.CornerRadius = UDim.new(0, 8)
+    panelCorner.Parent = panel
 
-    -- Title bar
+    -- ── Title ────────────────────────────────────────────────────────────────
     local title = Instance.new("TextLabel")
     title.Name               = "Title"
-    title.Size               = UDim2.new(1, 0, 0, 18)
-    title.Position           = UDim2.new(0, 0, 0, 2)
+    title.Size               = UDim2.new(1, -30, 0, titleH)
+    title.Position           = UDim2.new(0, 6, 0, 0)
     title.BackgroundTransparency = 1
     title.Text               = "🟣 Noclip Shape Map"
     title.TextColor3         = Color3.new(0.85, 0.5, 1)
     title.TextSize           = 11
     title.Font               = Enum.Font.Code
-    title.TextXAlignment     = Enum.TextXAlignment.Center
+    title.TextXAlignment     = Enum.TextXAlignment.Left
+    title.TextYAlignment     = Enum.TextYAlignment.Center
     title.Parent             = panel
 
-    -- Canvas (the actual map area)
+    -- ── Fullscreen button (top-right of panel) ───────────────────────────────
+    local fsBtn = Instance.new("TextButton")
+    fsBtn.Name               = "FullscreenBtn"
+    fsBtn.Size               = UDim2.new(0, 22, 0, 22)
+    fsBtn.Position           = UDim2.new(1, -26, 0, 1)
+    fsBtn.BackgroundColor3   = Color3.new(0.18, 0.18, 0.22)
+    fsBtn.BorderSizePixel    = 0
+    fsBtn.Text               = "⛶"
+    fsBtn.TextColor3         = Color3.new(0.85, 0.5, 1)
+    fsBtn.TextSize           = 14
+    fsBtn.Font               = Enum.Font.Code
+    fsBtn.ZIndex             = 10
+    fsBtn.Parent             = panel
+
+    local fsBtnCorner = Instance.new("UICorner")
+    fsBtnCorner.CornerRadius = UDim.new(0, 4)
+    fsBtnCorner.Parent = fsBtn
+
+    -- ── Canvas ───────────────────────────────────────────────────────────────
     local canvas = Instance.new("Frame")
-    canvas.Name               = "Canvas"
-    canvas.Size               = UDim2.new(0, ds, 0, ds)
-    canvas.Position           = UDim2.new(0, pad, 0, 20)
-    canvas.BackgroundColor3   = Color3.new(0.04, 0.04, 0.06)
-    canvas.BorderSizePixel    = 0
-    canvas.ClipsDescendants   = true
-    canvas.Parent             = panel
+    canvas.Name             = "Canvas"
+    canvas.Size             = UDim2.new(0, ds, 0, ds)
+    canvas.Position         = UDim2.new(0, pad, 0, titleH)
+    canvas.BackgroundColor3 = Color3.new(0.04, 0.04, 0.06)
+    canvas.BorderSizePixel  = 0
+    canvas.ClipsDescendants = true
+    canvas.Parent           = panel
 
-    -- Cross-hair: character position indicator (centre)
+    -- ── Character dot (centre of canvas) ────────────────────────────────────
     local charDot = Instance.new("Frame")
-    charDot.Name              = "CharDot"
-    charDot.Size              = UDim2.new(0, 6, 0, 6)
-    charDot.Position          = UDim2.new(0.5, -3, 0.5, -3)
-    charDot.BackgroundColor3  = Color3.new(1, 1, 1)
-    charDot.BorderSizePixel   = 0
-    charDot.ZIndex            = 5
-    charDot.Parent            = canvas
-
+    charDot.Name            = "CharDot"
+    charDot.Size            = UDim2.new(0, 7, 0, 7)
+    charDot.Position        = UDim2.new(0.5, -3, 0.5, -3)
+    charDot.BackgroundColor3 = Color3.new(1, 1, 1)
+    charDot.BorderSizePixel = 0
+    charDot.ZIndex          = 5
+    charDot.Parent          = canvas
     local charCorner = Instance.new("UICorner")
     charCorner.CornerRadius = UDim.new(1, 0)
     charCorner.Parent = charDot
 
+    -- ── Fullscreen toggle logic ──────────────────────────────────────────────
+    local function applyLayout()
+        if isFullscreen then
+            -- Fill entire screen
+            panel.Size     = UDim2.new(1, -24, 1, -24)
+            panel.Position = UDim2.new(0, 12, 0, 12)
+            canvas.Size    = UDim2.new(1, -pad*2, 1, -titleH - pad)
+            canvas.Position = UDim2.new(0, pad, 0, titleH)
+            fsBtn.Text     = "✕"
+            title.Text     = "🟣 Noclip Shape Map  (fullscreen)"
+            -- Force map refresh with new canvas size
+            State.noclipLastMapUpdate = 0
+        else
+            -- Back to minimap corner
+            panel.Size     = UDim2.new(0, ds + pad*2, 0, ds + pad*2 + titleH)
+            panel.Position = UDim2.new(1, -(ds + pad*2 + 12), 1, -(ds + pad*2 + titleH + 12))
+            canvas.Size    = UDim2.new(0, ds, 0, ds)
+            canvas.Position = UDim2.new(0, pad, 0, titleH)
+            fsBtn.Text     = "⛶"
+            title.Text     = "🟣 Noclip Shape Map"
+            State.noclipLastMapUpdate = 0
+        end
+    end
+
+    fsBtn.MouseButton1Click:Connect(function()
+        isFullscreen = not isFullscreen
+        applyLayout()
+    end)
+
     State.noclipMapGui = {
         screenGui  = screenGui,
+        panel      = panel,
         canvas     = canvas,
+        isFullscreen = function() return isFullscreen end,
     }
     State.noclipPixelPool = {}
 end
@@ -1252,14 +1306,20 @@ local function UpdateNoclipMapDisplay()
     local rootPart = GetRootPart()
     if not rootPart then return end
 
-    local canvas     = State.noclipMapGui.canvas
-    local ds         = Config.NoclipMapDisplaySize
+    local gui        = State.noclipMapGui
+    local canvas     = gui.canvas
     local viewR      = Config.NoclipMapViewRadius
     local cellSize   = math.max(1, Config.NoclipCellSize)
     local charPos    = rootPart.Position
 
-    -- Pixel size in screen-space (studs-per-cell → pixels-per-cell)
-    local pxPerCell  = math.max(1, math.floor(ds / (viewR * 2 / cellSize)))
+    -- In fullscreen mode use the actual canvas pixel size; in minimap use config size
+    local fullscreen = gui.isFullscreen and gui.isFullscreen()
+    local ds = fullscreen
+        and math.min(canvas.AbsoluteSize.X, canvas.AbsoluteSize.Y)
+        or  Config.NoclipMapDisplaySize
+
+    -- Pixel size in screen-space — bigger canvas = bigger dots
+    local pxPerCell = math.max(1, math.floor(ds / (viewR * 2 / cellSize)))
 
     -- Collect visible solid cells
     local visible = {}
@@ -2086,4 +2146,5 @@ Log("Features: Forward Scan, 360° Scan, Ground Detection, LOS, Terrain Profile,
 Log("Performance: Caching enabled, " .. Config.MaxRaysPerFrame .. " max rays/frame")
 
 return RaycastingVision
+
 
