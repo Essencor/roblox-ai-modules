@@ -67,7 +67,7 @@ local Config = {
     MaxJumpableGapLength = 6,  -- Maximum gap length (in studs) character can jump over
     TerrainScanDistance = 10,  -- How far ahead to scan terrain (in studs)
     UseBackgroundDomeMapping = true,
-    DomeMappingRadius = 70,
+    DomeMappingRadius = 400,
     DomeMappingRaysPerStep = 5,
     DomeMappingStepWait = 0.03,
     DomeMappingReflectionBounces = 2,
@@ -225,11 +225,19 @@ StartRaycastMapping = function()
     if ok then
         Stats.domeMappingStarts = Stats.domeMappingStarts + 1
         Log("Background dome raycast mapping active", "INFO")
-        return true
+    else
+        Log("Failed to start dome mapping: " .. tostring(err), "WARN")
     end
 
-    Log("Failed to start dome mapping: " .. tostring(err), "WARN")
-    return false
+    -- Also start noclip sphere mapping in parallel
+    if type(RaycastingVision.StartNoclipMapping) == "function" then
+        pcall(function()
+            RaycastingVision.StartNoclipMapping()
+        end)
+        Log("Noclip sphere mapping active (parallel)", "INFO")
+    end
+
+    return ok
 end
 
 local function PerformPreNavigationScan(targetPos)
