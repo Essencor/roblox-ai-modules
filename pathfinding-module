@@ -1342,7 +1342,9 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     local lastProgressTime = tick()
     local lastMoveToTime = tick()
     local lastScanTime = 0  -- Throttle scanning
-    local lastProgressLog = 0
+    local lastProgressLog  = 0
+    local lastWallScan     = 0
+    local wallStuckSince   = nil   -- when we first detected wall + no-progress
 
     while tick() - startTime < timeout do
         if not IsActiveNavigation(navigationId) then
@@ -1358,15 +1360,45 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             lastMoveToTime = tick()
         end
 
+        -- Wall-ahead detection: scan forward every 0.3s.
+        -- If a wall is within 2.5 studs AND we haven't progressed in 1s → recover
+        if HasRaycasting() and tick() - lastWallScan >= 0.3 then
+            lastWallScan = tick()
+            local wallScan = pcall(function()
+                local scan = RaycastingVision.ScanForward(4, 3)
+                if scan and scan.hasObstacle and scan.minDistance < 2.5 then
+                    if distance >= lastProgressDistance - 0.3 then
+                        -- Wall ahead with no progress
+                        if not wallStuckSince then
+                            wallStuckSince = tick()
+                        elseif tick() - wallStuckSince >= 1.0 then
+                            -- Been stuck against wall for 1+ second — recover
+                            Log("🧱 Wall detected " .. math.floor(scan.minDistance*10)/10 .. " studs ahead with no progress — recovering", "WARN")
+                            wallStuckSince = nil
+                            RecoverFromStuck("wall")
+                            lastProgressTime = tick()
+                            lastProgressDistance = distance
+                        end
+                    else
+                        wallStuckSince = nil  -- making progress, reset
+                    end
+                else
+                    wallStuckSince = nil  -- no wall, reset
+                end
+            end)
+        end
+
         if tick() - lastProgressTime >= 0.4 then
             humanoid:MoveTo(waypointPos)
-            -- Only force-jump if grounded and cooldown has elapsed
+            -- Only jump on no-progress if there ISN'T a flat wall right ahead
+            -- (jumping into a wall is useless; let the wall scan handle that case)
             local hState = humanoid:GetState()
             local isGrounded = hState == Enum.HumanoidStateType.Running
                 or hState == Enum.HumanoidStateType.RunningNoPhysics
                 or hState == Enum.HumanoidStateType.Landed
                 or hState == Enum.HumanoidStateType.None
-            if isGrounded and tick() - lastJumpTime > 0.8 then
+            local wallClose = wallStuckSince ~= nil  -- wall scan already flagged it
+            if isGrounded and tick() - lastJumpTime > 0.8 and not wallClose then
                 humanoid.Jump = true
                 lastJumpTime = tick()
             end
