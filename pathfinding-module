@@ -85,6 +85,10 @@ local Config = {
     DirectFallbackTimeout = 18,
     DirectFallbackReachDistance = 2.5,
     DirectFallbackMaxDistance = 180,
+    -- Rolling horizon: limits path segments so PathfindingService recomputes often
+    RollingHorizonEnabled = true,    -- use noclip checkpoints + short PFS segments
+    RollingHorizonCheckpoints = 6,   -- how many Dijkstra waypoints to use as goals
+    RollingHorizonMaxWaypoints = 20, -- cap PFS waypoints per segment
 }
 
 -- State
@@ -1027,7 +1031,17 @@ local function ComputePath(startPos, endPos, useDeathAvoidance)
         waypoints = filteredWaypoints
     end
 
-    Log("Path computed: " .. #waypoints .. " waypoints, distance: " .. math.floor(GetDistance(startPos, endPos)))
+    -- Cap waypoints for rolling-horizon mode so the path stays short and fresh
+    if Config.RollingHorizonEnabled and #waypoints > Config.RollingHorizonMaxWaypoints then
+        local truncated = {}
+        for i = 1, Config.RollingHorizonMaxWaypoints do
+            truncated[i] = waypoints[i]
+        end
+        waypoints = truncated
+        Log("Path truncated to " .. #waypoints .. " waypoints (rolling horizon)")
+    else
+        Log("Path computed: " .. #waypoints .. " waypoints, distance: " .. math.floor(GetDistance(startPos, endPos)))
+    end
 
     return {
         path = path,
@@ -1828,86 +1842,110 @@ function PathfindingModule.Navigate(target, mode)
 
     ClearVisualizations()
 
-    local maxAttempts = Config.MaxRetries
     local success = false
 
-    for attempt = 1, maxAttempts do
-        if not IsActiveNavigation(navigationId) then
-            return false
-        end
+    -- ── Rolling horizon: get Dijkstra checkpoints first, then drive short PFS
+    -- segments between them so the path constantly recomputes as we move. ────
+    if Config.RollingHorizonEnabled and HasRaycasting()
+    and type(RaycastingVision.GetNoclipPath) == "function" then
+        rootPart = GetRootPart()
+        local noclipWaypoints = rootPart and RaycastingVision.GetNoclipPath(
+            rootPart.Position, endPos, 4000)
 
-        if attempt > 1 then
-            Log("🔄 Retry attempt " .. attempt .. "/" .. maxAttempts, "WARN")
-            task.wait(1)
-            if not IsActiveNavigation(navigationId) then
-                return false
+        if noclipWaypoints and #noclipWaypoints >= 2 then
+            -- Pick evenly-spaced checkpoints from the Dijkstra path
+            local checkpoints = {}
+            local step = math.max(1, math.floor(#noclipWaypoints / Config.RollingHorizonCheckpoints))
+            for i = step, #noclipWaypoints - 1, step do
+                table.insert(checkpoints, noclipWaypoints[i])
             end
-        end
+            table.insert(checkpoints, endPos)   -- always end at true goal
 
-        Log("📊 Computing path (attempt " .. attempt .. ")...", "INFO")
-        local pathData = ComputePath(rootPart.Position, endPos, true)
+            Log("🗺️  Rolling horizon: " .. #checkpoints .. " checkpoints from noclip map", "INFO")
 
-        if pathData then
-            Log("✅ Path computed successfully!", "INFO")
-            State.currentPath = pathData
-            success = FollowPath(pathData, navigationId)
+            for ci, checkpoint in ipairs(checkpoints) do
+                if not IsActiveNavigation(navigationId) then return false end
+                rootPart = GetRootPart()
+                if not rootPart then return false end
 
-            if success then
-                Log("🎉 Path completed!", "INFO")
-                break
+                local distToChk = GetDistance(rootPart.Position, checkpoint)
+                if distToChk >= 4 then
+                    Log("🗺️  Checkpoint " .. ci .. "/" .. #checkpoints
+                        .. " (" .. math.floor(distToChk) .. " studs)", "INFO")
+
+                    -- Short PFS segment to this checkpoint
+                    local segData = ComputePath(rootPart.Position, checkpoint, true)
+                        or ComputePath(rootPart.Position, checkpoint, false)
+
+                    if segData then
+                        local segOk = FollowPath(segData, navigationId)
+                        if not segOk then
+                            Log("🗺️  Segment " .. ci .. " failed, recovering...", "WARN")
+                            RecoverFromStuck("wall")
+                            task.wait(0.5)
+                        end
+                    else
+                        Log("🗺️  PFS failed for checkpoint " .. ci .. ", skipping", "WARN")
+                    end
+                else
+                    Log("🗺️  Checkpoint " .. ci .. " already nearby, skipping", "INFO")
+                end
+            end
+
+            -- Final check: did we reach the destination?
+            rootPart = GetRootPart()
+            if rootPart and GetDistance(rootPart.Position, endPos) <= 8 then
+                success = true
+                Log("🗺️  Rolling horizon navigation succeeded!", "INFO")
             else
+                Log("🗺️  Rolling horizon incomplete, falling back to standard nav", "WARN")
+            end
+        else
+            Log("🗺️  Noclip map empty — using standard navigation", "INFO")
+        end
+    end
+
+    -- ── Standard navigation (used when rolling horizon disabled/failed) ──────
+    if not success then
+        local maxAttempts = Config.MaxRetries
+        for attempt = 1, maxAttempts do
+            if not IsActiveNavigation(navigationId) then return false end
+
+            if attempt > 1 then
+                Log("🔄 Retry attempt " .. attempt .. "/" .. maxAttempts, "WARN")
+                task.wait(1)
+                if not IsActiveNavigation(navigationId) then return false end
+            end
+
+            Log("📊 Computing path (attempt " .. attempt .. ")...", "INFO")
+            local pathData = ComputePath(rootPart.Position, endPos, true)
+
+            if pathData then
+                Log("✅ Path computed successfully!", "INFO")
+                State.currentPath = pathData
+                success = FollowPath(pathData, navigationId)
+                if success then Log("🎉 Path completed!", "INFO"); break end
+
                 Log("❌ Path following failed", "WARN")
                 if Config.UseDirectFallback then
                     success = DirectMoveFallback(endPos, navigationId, "Path following stalled")
-                    if success then
-                        Log("Direct fallback navigation succeeded", "INFO")
-                        break
+                    if success then Log("Direct fallback navigation succeeded", "INFO"); break end
+                end
+            else
+                Log("❌ Path computation failed (attempt " .. attempt .. ")", "ERROR")
+                if attempt < maxAttempts then
+                    Log("🔄 Retrying without death zone avoidance...", "INFO")
+                    pathData = ComputePath(rootPart.Position, endPos, false)
+                    if pathData then
+                        State.currentPath = pathData
+                        success = FollowPath(pathData, navigationId)
+                        if success then Log("🎉 Navigation succeeded!", "INFO"); break end
                     end
                 end
-            end
-        else
-            Log("❌ Path computation failed (attempt " .. attempt .. ")", "ERROR")
 
-            if attempt < maxAttempts then
-                -- Try without death avoidance
-                Log("🔄 Retrying without death zone avoidance...", "INFO")
-                pathData = ComputePath(rootPart.Position, endPos, false)
-                if pathData then
-                    Log("✅ Path found (ignoring death zones)", "INFO")
-                    State.currentPath = pathData
-                    success = FollowPath(pathData, navigationId)
-                    if success then
-                        Log("🎉 Navigation succeeded!", "INFO")
-                        break
-                    end
-                end
-            end
-
-            -- Try noclip spatial-map path (Dijkstra) before the dumb direct fallback
-            if not success and HasRaycasting()
-            and type(RaycastingVision.GetNoclipPath) == "function" then
-                Log("🗺️  PathfindingService failed — trying noclip spatial-map path...", "INFO")
-                rootPart = GetRootPart()
-                local noclipWaypoints = rootPart and RaycastingVision.GetNoclipPath(rootPart.Position, endPos, 3000)
-                if noclipWaypoints and #noclipWaypoints >= 2 then
-                    Log("🗺️  Noclip path found (" .. #noclipWaypoints .. " waypoints), following...", "INFO")
-                    success = FollowNoclipWaypoints(noclipWaypoints, endPos, navigationId)
-                    if success then
-                        Log("🗺️  Noclip path navigation succeeded!", "INFO")
-                        break
-                    else
-                        Log("🗺️  Noclip path following failed", "WARN")
-                    end
-                else
-                    Log("🗺️  Noclip spatial map has no route yet (map may still be building)", "WARN")
-                end
-            end
-
-            if not success and Config.UseDirectFallback then
-                success = DirectMoveFallback(endPos, navigationId, "PathfindingService could not compute a route")
-                if success then
-                    Log("Direct fallback navigation succeeded", "INFO")
-                    break
+                if not success and Config.UseDirectFallback then
+                    success = DirectMoveFallback(endPos, navigationId, "PathfindingService failed")
+                    if success then Log("Direct fallback navigation succeeded", "INFO"); break end
                 end
             end
         end
