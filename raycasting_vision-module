@@ -676,7 +676,7 @@ local UNIFIED_SOURCE_COLOR = {
 }
 local UNIFIED_MAX = 20000
 
-local function StoreUnifiedCell(position, source, normal)
+local function StoreUnifiedCell(position, source, normal, instance)
     local cs  = math.max(1, Config.NoclipCellSize)
     local key = source .. "_"
         .. math.floor(position.X / cs) .. ","
@@ -689,6 +689,7 @@ local function StoreUnifiedCell(position, source, normal)
             key       = key,
             position  = position,
             normal    = normal,
+            instance  = instance,
             source    = source,
             color     = UNIFIED_SOURCE_COLOR[source] or Color3.new(1, 1, 1),
             firstSeen = now,
@@ -699,6 +700,7 @@ local function StoreUnifiedCell(position, source, normal)
     else
         entry.position = position
         entry.normal   = normal
+        entry.instance = instance
         entry.lastSeen = now
     end
     -- Evict oldest when over cap
@@ -792,7 +794,7 @@ local function StoreDomeHit(origin, direction, result, kind, bounceIndex, source
     -- Write to unified map — skip floor/ceiling (mostly vertical normals)
     if math.abs(result.Normal.Y) <= 0.7 then
         local unifiedSource = (kind == "reflection") and "reflection" or "dome"
-        StoreUnifiedCell(result.Position, unifiedSource, result.Normal)
+        StoreUnifiedCell(result.Position, unifiedSource, result.Normal, result.Instance)
     end
 
     if sourceKey then
@@ -1104,7 +1106,7 @@ local function StoreNoclipCell(position, normal, instance, material)
         entry.lastSeen = now
     end
     entry.hits = entry.hits + 1
-    StoreUnifiedCell(position, "noclip", normal)
+    StoreUnifiedCell(position, "noclip", normal, instance)
 end
 
 local function PruneNoclipMap()
@@ -1437,18 +1439,17 @@ local function UpdateNoclipMapDisplay()
     -- cellSize studs / (viewR*2 studs total) = fraction of canvas per cell
     local dotScale = cellSize / (viewR * 2)
 
-    -- Find the Y of the ground the character is actually standing on.
-    -- Any map dot within 1 stud of that surface gets hidden — the user
-    -- literally said "the part your touching your feet, don't show it."
-    local groundY = -math.huge
+    -- Find the exact part the character's feet are touching.
+    -- Dots from that specific part instance are hidden on the 2D map.
+    local groundPart = nil
     do
         local groundParams = RaycastParams.new()
         groundParams.FilterType = Enum.RaycastFilterType.Exclude
         local char = GetCharacter()
         if char then groundParams.FilterDescendantsInstances = {char} end
-        local groundHit = workspace:Raycast(charPos, Vector3.new(0, -10, 0), groundParams)
+        local groundHit = workspace:Raycast(charPos, Vector3.new(0, -6, 0), groundParams)
         if groundHit then
-            groundY = groundHit.Position.Y
+            groundPart = groundHit.Instance
         end
     end
 
@@ -1466,11 +1467,11 @@ local function UpdateNoclipMapDisplay()
         local dz  = pos.Z - charPos.Z
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
             local n      = entry.normal
-            local isCeil    = n and math.abs(n.Y) > 0.6       -- skip floor/ceiling surfaces
-            local isLow     = pos.Y < charPos.Y - 1            -- below foot level
-            local isHigh    = pos.Y > charPos.Y + 8            -- above ceiling
-            local isGround  = pos.Y <= groundY + 1             -- within 1 stud of the actual floor
-            if not isCeil and not isLow and not isHigh and not isGround then
+            local isCeil       = n and math.abs(n.Y) > 0.6
+            local isLow        = pos.Y < charPos.Y - 1
+            local isHigh       = pos.Y > charPos.Y + 8
+            local isFloorPart  = groundPart and entry.instance == groundPart
+            if not isCeil and not isLow and not isHigh and not isFloorPart then
                 local xzKey = math.floor(pos.X / cs) .. "," .. math.floor(pos.Z / cs)
                 local dist  = math.abs(pos.Y - targetY)
                 local prev  = xzBest[xzKey]
