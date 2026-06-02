@@ -282,7 +282,22 @@ source = source:gsub(
 	'local function loadRemoteChunk%(url, label%).-return result%s*\nend',
 	function()
 		return [[local function loadRemoteChunk(url, label)
-   local source = game:HttpGet(url, true)
+   -- Try customHttpRequest first (works inside the guarded env / UGC contexts).
+   -- Fall back to game:HttpGet for environments that don't have it.
+   local source
+   do
+      local httpOk, httpResult = pcall(customHttpRequest, url, "GET", {}, nil)
+      if httpOk and type(httpResult) == "string" and #httpResult > 0 then
+         source = httpResult
+      else
+         local gameOk, gameResult = pcall(function() return game:HttpGet(url, true) end)
+         if gameOk and type(gameResult) == "string" then
+            source = gameResult
+         else
+            error("loadRemoteChunk: all HTTP methods failed for " .. tostring(url))
+         end
+      end
+   end
 
    if label == "Rayfield" and type(source) == "string" then
       source = source:gsub("return loadstring%(content%)%(%)", function()
