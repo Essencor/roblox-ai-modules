@@ -665,6 +665,50 @@ function RaycastingVision.AnalyzeMovementSegment(startPos, endPos)
 end
 
 -- ===================================
+-- UNIFIED MAP  (must be defined before dome & noclip so both can write to it)
+-- ===================================
+
+-- Source colours used by all three ray types
+local UNIFIED_SOURCE_COLOR = {
+    noclip     = Color3.new(0.7, 0, 1),    -- purple
+    dome       = Color3.new(0, 1, 1),      -- cyan
+    reflection = Color3.new(1, 0.85, 0),   -- yellow
+}
+local UNIFIED_MAX = 20000
+
+local function StoreUnifiedCell(position, source, normal)
+    local cs  = math.max(1, Config.NoclipCellSize)
+    local key = source .. "_"
+        .. math.floor(position.X / cs) .. ","
+        .. math.floor(position.Y / cs) .. ","
+        .. math.floor(position.Z / cs)
+    local now   = tick()
+    local entry = State.unifiedMap[key]
+    if not entry then
+        entry = {
+            key       = key,
+            position  = position,
+            normal    = normal,
+            source    = source,
+            color     = UNIFIED_SOURCE_COLOR[source] or Color3.new(1, 1, 1),
+            firstSeen = now,
+            lastSeen  = now,
+        }
+        State.unifiedMap[key] = entry
+        table.insert(State.unifiedMapOrder, key)
+    else
+        entry.position = position
+        entry.normal   = normal
+        entry.lastSeen = now
+    end
+    -- Evict oldest when over cap
+    while #State.unifiedMapOrder > UNIFIED_MAX do
+        local old = table.remove(State.unifiedMapOrder, 1)
+        State.unifiedMap[old] = nil
+    end
+end
+
+-- ===================================
 -- BACKGROUND DOME + REFLECTION MAPPING
 -- ===================================
 
@@ -1073,46 +1117,6 @@ local function PruneNoclipMap()
     while #State.noclipMapOrder > Config.NoclipMaxCells do
         local old = table.remove(State.noclipMapOrder, 1)
         State.noclipMap[old] = nil
-    end
-end
-
--- Source colours for unified map
-local UNIFIED_SOURCE_COLOR = {
-    noclip     = Color3.new(0.7, 0, 1),        -- purple
-    dome       = Color3.new(0, 1, 1),           -- cyan
-    reflection = Color3.new(1, 0.85, 0),        -- yellow
-}
-local UNIFIED_MAX   = 20000
-local UNIFIED_TTL   = 90
-
-local function StoreUnifiedCell(position, source, normal)
-    local cs  = math.max(1, Config.NoclipCellSize)
-    local key = source .. "_"
-        .. math.floor(position.X / cs) .. ","
-        .. math.floor(position.Y / cs) .. ","
-        .. math.floor(position.Z / cs)
-    local now   = tick()
-    local entry = State.unifiedMap[key]
-    if not entry then
-        entry = {
-            key       = key,
-            position  = position,
-            normal    = normal,
-            source    = source,
-            color     = UNIFIED_SOURCE_COLOR[source] or Color3.new(1,1,1),
-            firstSeen = now,
-            lastSeen  = now,
-        }
-        State.unifiedMap[key] = entry
-        table.insert(State.unifiedMapOrder, key)
-    else
-        entry.position = position
-        entry.normal   = normal
-        entry.lastSeen = now
-    end
-    while #State.unifiedMapOrder > UNIFIED_MAX do
-        local old = table.remove(State.unifiedMapOrder, 1)
-        State.unifiedMap[old] = nil
     end
 end
 
