@@ -1306,6 +1306,25 @@ local function CreateNoclipMapGui()
     fsBtnCorner.CornerRadius = UDim.new(0, 4)
     fsBtnCorner.Parent = fsBtn
 
+    -- ── Reset view button (recentres + resets zoom) ──────────────────────────
+    local resetBtn = Instance.new("TextButton")
+    resetBtn.Name             = "ResetBtn"
+    resetBtn.AnchorPoint      = Vector2.new(1, 0)
+    resetBtn.Size             = UDim2.new(0, 30, 0, titleH - 2)
+    resetBtn.Position         = UDim2.new(1, -36, 0, 1)
+    resetBtn.BackgroundColor3 = Color3.new(0.2, 0.2, 0.25)
+    resetBtn.BorderSizePixel  = 0
+    resetBtn.Text             = "[ o ]"
+    resetBtn.TextColor3       = Color3.new(0.85, 0.85, 0.85)
+    resetBtn.TextSize         = 9
+    resetBtn.Font             = Enum.Font.GothamBold
+    resetBtn.AutoButtonColor  = true
+    resetBtn.ZIndex           = 10
+    resetBtn.Parent           = panel
+    local resetCorner = Instance.new("UICorner")
+    resetCorner.CornerRadius = UDim.new(0, 4)
+    resetCorner.Parent = resetBtn
+
     -- ── Canvas ───────────────────────────────────────────────────────────────
     local canvas = Instance.new("Frame")
     canvas.Name             = "Canvas"
@@ -1332,7 +1351,73 @@ local function CreateNoclipMapGui()
     charCorner.CornerRadius = UDim.new(1, 0)
     charCorner.Parent = charDot
 
-    -- ── Drag logic ───────────────────────────────────────────────────────────
+    -- ── Pan / zoom state (map content, not panel position) ───────────────────
+    local panX   = 0       -- world-stud offset from character X
+    local panZ   = 0       -- world-stud offset from character Z
+    local zoom   = 1.0     -- >1 = zoomed in, <1 = zoomed out
+
+    -- Drag on the canvas pans the map view
+    local panActive      = false
+    local panStartMouse  = Vector2.new()
+    local panStartX      = 0
+    local panStartZ      = 0
+
+    local function effectiveViewR()
+        return Config.NoclipMapViewRadius / zoom
+    end
+
+    canvas.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            panActive     = true
+            panStartMouse = Vector2.new(inp.Position.X, inp.Position.Y)
+            panStartX     = panX
+            panStartZ     = panZ
+        end
+    end)
+
+    local connPanChanged = UIS.InputChanged:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseWheel then
+            -- Scroll to zoom; only when mouse is over the canvas
+            local mpos = UIS:GetMouseLocation()
+            local cpos = canvas.AbsolutePosition
+            local csz  = canvas.AbsoluteSize
+            if mpos.X >= cpos.X and mpos.X <= cpos.X + csz.X
+            and mpos.Y >= cpos.Y and mpos.Y <= cpos.Y + csz.Y then
+                local delta = inp.Position.Z  -- +1 = scroll up = zoom in
+                zoom = math.clamp(zoom * (delta > 0 and 1.25 or 0.8), 0.05, 20)
+                State.noclipLastMapUpdate = 0
+            end
+        end
+
+        if panActive then
+            if inp.UserInputType == Enum.UserInputType.MouseMovement
+            or inp.UserInputType == Enum.UserInputType.Touch then
+                local d    = Vector2.new(inp.Position.X, inp.Position.Y) - panStartMouse
+                local csz  = canvas.AbsoluteSize
+                local vr   = effectiveViewR()
+                -- pixel delta → stud delta (drag right = view moves right = pan left)
+                local studsPerPx = (vr * 2) / math.max(csz.X, 1)
+                panX = panStartX - d.X * studsPerPx
+                panZ = panStartZ - d.Y * studsPerPx
+                State.noclipLastMapUpdate = 0
+            end
+        end
+    end)
+
+    local connPanEnded = UIS.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            panActive = false
+        end
+    end)
+
+    resetBtn.MouseButton1Click:Connect(function()
+        panX = 0; panZ = 0; zoom = 1.0
+        State.noclipLastMapUpdate = 0
+    end)
+
+    -- ── Panel drag logic (title bar moves the whole window) ──────────────────
     local dragActive    = false
     local dragStartMouse = Vector2.new()
     local dragStartPos  = panel.Position
@@ -1370,6 +1455,8 @@ local function CreateNoclipMapGui()
     screenGui.Destroying:Connect(function()
         connChanged:Disconnect()
         connEnded:Disconnect()
+        connPanChanged:Disconnect()
+        connPanEnded:Disconnect()
     end)
 
     -- ── Fullscreen toggle ────────────────────────────────────────────────────
@@ -1410,6 +1497,9 @@ local function CreateNoclipMapGui()
         panel        = panel,
         canvas       = canvas,
         isFullscreen = function() return isFullscreen end,
+        getPanX      = function() return panX end,
+        getPanZ      = function() return panZ end,
+        getZoom      = function() return zoom end,
     }
     State.noclipPixelPool = {}
 end
@@ -1431,13 +1521,27 @@ local function UpdateNoclipMapDisplay()
 
     local gui      = State.noclipMapGui
     local canvas   = gui.canvas
-    local viewR    = Config.NoclipMapViewRadius
     local cellSize = math.max(1, Config.NoclipCellSize)
     local charPos  = rootPart.Position
 
-    -- Dot size as a fraction of the canvas (works at any canvas resolution)
-    -- cellSize studs / (viewR*2 studs total) = fraction of canvas per cell
+    -- Apply pan and zoom
+    local zoom     = gui.getZoom and gui.getZoom() or 1.0
+    local panX     = gui.getPanX and gui.getPanX() or 0
+    local panZ     = gui.getPanZ and gui.getPanZ() or 0
+    local viewR    = Config.NoclipMapViewRadius / zoom   -- effective radius
+    local centerX  = charPos.X + panX
+    local centerZ  = charPos.Z + panZ
+
+    -- Dot size scales with zoom (smaller viewR = bigger dots)
     local dotScale = cellSize / (viewR * 2)
+
+    -- Update character dot position to reflect pan (may be off-centre when panned)
+    local charDot = canvas:FindFirstChild("CharDot")
+    if charDot then
+        local charSx = (-panX / viewR + 1) * 0.5
+        local charSy = (-panZ / viewR + 1) * 0.5
+        charDot.Position = UDim2.new(charSx, 0, charSy, 0)
+    end
 
     -- Find the part the character's feet are touching right now
     local groundPart = nil
@@ -1454,8 +1558,8 @@ local function UpdateNoclipMapDisplay()
     local visible = {}
     for _, entry in pairs(State.unifiedMap) do
         local pos = entry.position
-        local dx  = pos.X - charPos.X
-        local dz  = pos.Z - charPos.Z
+        local dx  = pos.X - centerX
+        local dz  = pos.Z - centerZ
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
             local isFloorTile    = groundPart and entry.instance == groundPart
             local isHorizSurface = entry.normal and math.abs(entry.normal.Y) > 0.6
