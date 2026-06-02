@@ -70,6 +70,13 @@ local Config = {
     NoclipMapDisplaySize = 220,    -- Minimap pixel size (square)
     NoclipMapViewRadius = 250,     -- Studs shown around character in minimap
     NoclipMapUpdateInterval = 0.4, -- Seconds between minimap refreshes
+    NoclipTorsoFilterOffset = 4,   -- Ignore hits more than N studs below the ray origin (filters floor)
+    -- 3D visualizer
+    NoclipVisualize3D = false,
+    NoclipVisualize3DRadius = 60,
+    NoclipVisualize3DMaxParts = 500,
+    NoclipVisualize3DUpdateInterval = 1.0,
+    NoclipVisualize3DSize = 0.35,
 
     -- Reflection mapping
     ReflectionMappingEnabled = true,
@@ -130,7 +137,13 @@ local State = {
     noclipLastFullScan = 0,
     noclipMapGui = nil,
     noclipPixelPool = {},
-    noclipLastMapUpdate = 0
+    noclipLastMapUpdate = 0,
+    -- Unified map (combines dome + reflection + noclip data)
+    unifiedMap = {},
+    unifiedMapOrder = {},
+    -- 3D visualizer
+    noclip3DPartPool = {},
+    noclipLast3DUpdate = 0
 }
 
 -- Statistics
@@ -732,6 +745,12 @@ local function StoreDomeHit(origin, direction, result, kind, bounceIndex, source
 
     entry.hits = entry.hits + 1
 
+    -- Write to unified map — skip floor/ceiling (mostly vertical normals)
+    if math.abs(result.Normal.Y) <= 0.7 then
+        local unifiedSource = (kind == "reflection") and "reflection" or "dome"
+        StoreUnifiedCell(result.Position, unifiedSource, result.Normal)
+    end
+
     if sourceKey then
         table.insert(State.reflectionEdges, {
             from = sourceKey,
@@ -1011,7 +1030,7 @@ local function GetNoclipCellKey(position)
         .. math.floor(position.Z / cs)
 end
 
-local function StoreNoclipCell(position, instance, material)
+local function StoreNoclipCell(position, normal, instance, material)
     local key = GetNoclipCellKey(position)
     local now = tick()
     local entry = State.noclipMap[key]
@@ -1019,6 +1038,7 @@ local function StoreNoclipCell(position, instance, material)
         entry = {
             key       = key,
             position  = position,
+            normal    = normal,
             instance  = instance,
             material  = material,
             firstSeen = now,
@@ -1029,11 +1049,13 @@ local function StoreNoclipCell(position, instance, material)
         table.insert(State.noclipMapOrder, key)
     else
         entry.position = position
+        entry.normal   = normal
         entry.instance = instance
         entry.material = material
         entry.lastSeen = now
     end
     entry.hits = entry.hits + 1
+    StoreUnifiedCell(position, "noclip", normal)
 end
 
 local function PruneNoclipMap()
@@ -1051,6 +1073,46 @@ local function PruneNoclipMap()
     while #State.noclipMapOrder > Config.NoclipMaxCells do
         local old = table.remove(State.noclipMapOrder, 1)
         State.noclipMap[old] = nil
+    end
+end
+
+-- Source colours for unified map
+local UNIFIED_SOURCE_COLOR = {
+    noclip     = Color3.new(0.7, 0, 1),        -- purple
+    dome       = Color3.new(0, 1, 1),           -- cyan
+    reflection = Color3.new(1, 0.85, 0),        -- yellow
+}
+local UNIFIED_MAX   = 20000
+local UNIFIED_TTL   = 90
+
+local function StoreUnifiedCell(position, source, normal)
+    local cs  = math.max(1, Config.NoclipCellSize)
+    local key = source .. "_"
+        .. math.floor(position.X / cs) .. ","
+        .. math.floor(position.Y / cs) .. ","
+        .. math.floor(position.Z / cs)
+    local now   = tick()
+    local entry = State.unifiedMap[key]
+    if not entry then
+        entry = {
+            key       = key,
+            position  = position,
+            normal    = normal,
+            source    = source,
+            color     = UNIFIED_SOURCE_COLOR[source] or Color3.new(1,1,1),
+            firstSeen = now,
+            lastSeen  = now,
+        }
+        State.unifiedMap[key] = entry
+        table.insert(State.unifiedMapOrder, key)
+    else
+        entry.position = position
+        entry.normal   = normal
+        entry.lastSeen = now
+    end
+    while #State.unifiedMapOrder > UNIFIED_MAX do
+        local old = table.remove(State.unifiedMapOrder, 1)
+        State.unifiedMap[old] = nil
     end
 end
 
@@ -1080,13 +1142,11 @@ local function CastNoclipRay(origin, direction)
         local segDist = (result.Position - currentOrigin).Magnitude
         totalTraveled = totalTraveled + segDist
 
-        -- Skip floor/ceiling hits — their normals are mostly vertical.
-        -- Recording them makes every cell appear solid from above and ruins
-        -- the top-down shape map.
-        if math.abs(result.Normal.Y) <= 0.7 then
-            StoreNoclipCell(result.Position, result.Instance, result.Material)
-            Stats.noclipHits = Stats.noclipHits + 1
-        end
+        -- Store ALL hits (floors, below-torso, everything).
+        -- Filtering happens at render time: the 2D minimap hides floor/
+        -- below-torso hits, but the 3D visualizer shows the full data.
+        StoreNoclipCell(result.Position, result.Normal, result.Instance, result.Material)
+        Stats.noclipHits = Stats.noclipHits + 1
 
         -- Purple ray segment visualisation
         if Config.ShowRays then
@@ -1172,23 +1232,25 @@ local function CreateNoclipMapGui()
     local player = Players.LocalPlayer
     if not player then return end
 
-    local ds      = Config.NoclipMapDisplaySize
-    local pad     = 8
-    local titleH  = 24
+    local UIS    = game:GetService("UserInputService")
+    local ds     = Config.NoclipMapDisplaySize
+    local pad    = 8
+    local titleH = 24
     local isFullscreen = false
 
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name           = "NoclipShapeDisplay"
     screenGui.ResetOnSpawn   = false
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.IgnoreGuiInset = true
+    screenGui.IgnoreGuiInset = false
     screenGui.Parent         = player.PlayerGui
 
-    -- ── Panel ────────────────────────────────────────────────────────────────
+    -- ── Panel (anchored bottom-right) ────────────────────────────────────────
     local panel = Instance.new("Frame")
     panel.Name                   = "Panel"
+    panel.AnchorPoint            = Vector2.new(1, 1)
     panel.Size                   = UDim2.new(0, ds + pad*2, 0, ds + pad*2 + titleH)
-    panel.Position               = UDim2.new(1, -(ds + pad*2 + 12), 1, -(ds + pad*2 + titleH + 12))
+    panel.Position               = UDim2.new(1, -12, 1, -12)
     panel.BackgroundColor3       = Color3.new(0, 0, 0)
     panel.BackgroundTransparency = 0.4
     panel.BorderSizePixel        = 0
@@ -1198,35 +1260,37 @@ local function CreateNoclipMapGui()
     panelCorner.CornerRadius = UDim.new(0, 8)
     panelCorner.Parent = panel
 
-    -- ── Title ────────────────────────────────────────────────────────────────
-    local title = Instance.new("TextLabel")
-    title.Name               = "Title"
-    title.Size               = UDim2.new(1, -30, 0, titleH)
-    title.Position           = UDim2.new(0, 6, 0, 0)
-    title.BackgroundTransparency = 1
-    title.Text               = "Noclip Shape Map"
-    title.TextColor3         = Color3.new(0.85, 0.5, 1)
-    title.TextSize           = 11
-    title.Font               = Enum.Font.Code
-    title.TextXAlignment     = Enum.TextXAlignment.Left
-    title.TextYAlignment     = Enum.TextYAlignment.Center
-    title.Parent             = panel
+    -- ── Title bar (also acts as drag handle) ─────────────────────────────────
+    local titleBar = Instance.new("TextButton")
+    titleBar.Name               = "TitleBar"
+    titleBar.Size               = UDim2.new(1, -34, 0, titleH)
+    titleBar.Position           = UDim2.new(0, 0, 0, 0)
+    titleBar.BackgroundTransparency = 1
+    titleBar.Text               = "Noclip Shape Map"
+    titleBar.TextColor3         = Color3.new(0.85, 0.5, 1)
+    titleBar.TextSize           = 11
+    titleBar.Font               = Enum.Font.GothamBold
+    titleBar.TextXAlignment     = Enum.TextXAlignment.Left
+    titleBar.TextTruncate       = Enum.TextTruncate.AtEnd
+    titleBar.AutoButtonColor    = false
+    titleBar.ZIndex             = 8
+    titleBar.Parent             = panel
 
-    -- ── Fullscreen button (top-right of panel) ───────────────────────────────
+    -- ── Fullscreen button ────────────────────────────────────────────────────
     local fsBtn = Instance.new("TextButton")
-    fsBtn.Name               = "FullscreenBtn"
-    fsBtn.Size               = UDim2.new(0, 28, 0, 20)
-    fsBtn.Position           = UDim2.new(1, -32, 0, 2)
-    fsBtn.BackgroundColor3   = Color3.new(0.55, 0.2, 0.9)
-    fsBtn.BorderSizePixel    = 0
-    fsBtn.Text               = "[ ]"
-    fsBtn.TextColor3         = Color3.new(1, 1, 1)
-    fsBtn.TextSize           = 11
-    fsBtn.Font               = Enum.Font.GothamBold
-    fsBtn.ZIndex             = 10
-    fsBtn.AutoButtonColor    = true
-    fsBtn.Parent             = panel
-
+    fsBtn.Name             = "FullscreenBtn"
+    fsBtn.AnchorPoint      = Vector2.new(1, 0)
+    fsBtn.Size             = UDim2.new(0, 30, 0, titleH - 2)
+    fsBtn.Position         = UDim2.new(1, -2, 0, 1)
+    fsBtn.BackgroundColor3 = Color3.new(0.5, 0.15, 0.85)
+    fsBtn.BorderSizePixel  = 0
+    fsBtn.Text             = "[ ]"
+    fsBtn.TextColor3       = Color3.new(1, 1, 1)
+    fsBtn.TextSize         = 11
+    fsBtn.Font             = Enum.Font.GothamBold
+    fsBtn.AutoButtonColor  = true
+    fsBtn.ZIndex           = 10
+    fsBtn.Parent           = panel
     local fsBtnCorner = Instance.new("UICorner")
     fsBtnCorner.CornerRadius = UDim.new(0, 4)
     fsBtnCorner.Parent = fsBtn
@@ -1234,6 +1298,7 @@ local function CreateNoclipMapGui()
     -- ── Canvas ───────────────────────────────────────────────────────────────
     local canvas = Instance.new("Frame")
     canvas.Name             = "Canvas"
+    canvas.AnchorPoint      = Vector2.new(0, 0)
     canvas.Size             = UDim2.new(0, ds, 0, ds)
     canvas.Position         = UDim2.new(0, pad, 0, titleH)
     canvas.BackgroundColor3 = Color3.new(0.04, 0.04, 0.06)
@@ -1241,52 +1306,97 @@ local function CreateNoclipMapGui()
     canvas.ClipsDescendants = true
     canvas.Parent           = panel
 
-    -- ── Character dot (centre of canvas) ────────────────────────────────────
+    -- ── Character dot — always pinned to the exact centre of canvas ───────────
     local charDot = Instance.new("Frame")
-    charDot.Name            = "CharDot"
-    charDot.Size            = UDim2.new(0, 7, 0, 7)
-    charDot.Position        = UDim2.new(0.5, -3, 0.5, -3)
+    charDot.Name             = "CharDot"
+    charDot.AnchorPoint      = Vector2.new(0.5, 0.5)
+    charDot.Size             = UDim2.new(0, 8, 0, 8)
+    charDot.Position         = UDim2.new(0.5, 0, 0.5, 0)
     charDot.BackgroundColor3 = Color3.new(1, 1, 1)
-    charDot.BorderSizePixel = 0
-    charDot.ZIndex          = 5
-    charDot.Parent          = canvas
+    charDot.BorderSizePixel  = 0
+    charDot.ZIndex           = 6
+    charDot.Parent           = canvas
     local charCorner = Instance.new("UICorner")
     charCorner.CornerRadius = UDim.new(1, 0)
     charCorner.Parent = charDot
 
-    -- ── Fullscreen toggle logic ──────────────────────────────────────────────
+    -- ── Drag logic ───────────────────────────────────────────────────────────
+    local dragActive    = false
+    local dragStartMouse = Vector2.new()
+    local dragStartPos  = panel.Position
+
+    titleBar.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            if isFullscreen then return end
+            dragActive     = true
+            dragStartMouse = Vector2.new(inp.Position.X, inp.Position.Y)
+            dragStartPos   = panel.Position
+        end
+    end)
+
+    local connChanged = UIS.InputChanged:Connect(function(inp)
+        if not dragActive then return end
+        if inp.UserInputType == Enum.UserInputType.MouseMovement
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            local d = Vector2.new(inp.Position.X, inp.Position.Y) - dragStartMouse
+            panel.Position = UDim2.new(
+                dragStartPos.X.Scale, dragStartPos.X.Offset + d.X,
+                dragStartPos.Y.Scale, dragStartPos.Y.Offset + d.Y
+            )
+        end
+    end)
+
+    local connEnded = UIS.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            dragActive = false
+        end
+    end)
+
+    -- Clean up UIS connections when GUI is destroyed
+    screenGui.Destroying:Connect(function()
+        connChanged:Disconnect()
+        connEnded:Disconnect()
+    end)
+
+    -- ── Fullscreen toggle ────────────────────────────────────────────────────
+    local miniPos  = panel.Position
+    local miniSize = panel.Size
+
     local function applyLayout()
         if isFullscreen then
-            -- Fill entire screen
-            panel.Size     = UDim2.new(1, -24, 1, -24)
-            panel.Position = UDim2.new(0, 12, 0, 12)
-            canvas.Size    = UDim2.new(1, -pad*2, 1, -titleH - pad)
-            canvas.Position = UDim2.new(0, pad, 0, titleH)
-            fsBtn.Text     = "[X]"
-            title.Text     = "Noclip Shape Map  (fullscreen)"
-            -- Force map refresh with new canvas size
-            State.noclipLastMapUpdate = 0
+            panel.AnchorPoint = Vector2.new(0, 0)
+            panel.Size        = UDim2.new(1, -24, 1, -24)
+            panel.Position    = UDim2.new(0, 12, 0, 12)
+            canvas.Size       = UDim2.new(1, -pad*2, 1, -titleH - pad)
+            fsBtn.Text        = "[X]"
+            titleBar.Text     = "Noclip Shape Map (fullscreen — drag disabled)"
         else
-            -- Back to minimap corner
-            panel.Size     = UDim2.new(0, ds + pad*2, 0, ds + pad*2 + titleH)
-            panel.Position = UDim2.new(1, -(ds + pad*2 + 12), 1, -(ds + pad*2 + titleH + 12))
-            canvas.Size    = UDim2.new(0, ds, 0, ds)
-            canvas.Position = UDim2.new(0, pad, 0, titleH)
-            fsBtn.Text     = "[ ]"
-            title.Text     = "Noclip Shape Map"
-            State.noclipLastMapUpdate = 0
+            panel.AnchorPoint = Vector2.new(1, 1)
+            panel.Size        = miniSize
+            panel.Position    = miniPos
+            canvas.Size       = UDim2.new(0, ds, 0, ds)
+            fsBtn.Text        = "[ ]"
+            titleBar.Text     = "Noclip Shape Map"
         end
+        State.noclipLastMapUpdate = 0
     end
 
     fsBtn.MouseButton1Click:Connect(function()
         isFullscreen = not isFullscreen
+        if not isFullscreen then
+            -- Save current mini position in case user dragged it
+            miniPos  = panel.Position
+            miniSize = panel.Size
+        end
         applyLayout()
     end)
 
     State.noclipMapGui = {
-        screenGui  = screenGui,
-        panel      = panel,
-        canvas     = canvas,
+        screenGui    = screenGui,
+        panel        = panel,
+        canvas       = canvas,
         isFullscreen = function() return isFullscreen end,
     }
     State.noclipPixelPool = {}
@@ -1322,16 +1432,23 @@ local function UpdateNoclipMapDisplay()
     -- Pixel size in screen-space — bigger canvas = bigger dots
     local pxPerCell = math.max(1, math.floor(ds / (viewR * 2 / cellSize)))
 
-    -- Collect visible solid cells
+    -- Collect visible cells from UNIFIED map (all 3 sources combined).
+    -- 2D filter: skip floor/ceiling hits and anything too far below torso.
+    local minY   = charPos.Y - Config.NoclipTorsoFilterOffset
     local visible = {}
-    for _, entry in pairs(State.noclipMap) do
-        local dx = entry.position.X - charPos.X
-        local dz = entry.position.Z - charPos.Z
+    for _, entry in pairs(State.unifiedMap) do
+        local pos = entry.position
+        local dx  = pos.X - charPos.X
+        local dz  = pos.Z - charPos.Z
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
-            -- Map world offset → pixel position (top-down: X→right, Z→down)
+            -- Floor/ceiling filter (noclip entries carry normals)
+            local n = entry.normal
+            if n and math.abs(n.Y) > 0.7 then continue end
+            -- Below-torso filter (only for noclip; dome/reflection are wall-only already)
+            if entry.source == "noclip" and pos.Y < minY then continue end
             local px = math.floor((dx / viewR + 1) * 0.5 * (ds - pxPerCell))
             local py = math.floor((dz / viewR + 1) * 0.5 * (ds - pxPerCell))
-            table.insert(visible, {px = px, py = py})
+            table.insert(visible, {px = px, py = py, color = entry.color})
         end
     end
 
@@ -1345,16 +1462,92 @@ local function UpdateNoclipMapDisplay()
         local dot = State.noclipPixelPool[i]
         if not dot then
             dot = Instance.new("Frame")
-            dot.BorderSizePixel   = 0
-            dot.BackgroundColor3  = Config.NoclipColor
-            dot.ZIndex            = 3
-            dot.Parent            = canvas
+            dot.BorderSizePixel = 0
+            dot.ZIndex          = 3
+            dot.Parent          = canvas
             State.noclipPixelPool[i] = dot
         end
-        dot.Size     = UDim2.new(0, pxPerCell, 0, pxPerCell)
-        dot.Position = UDim2.new(0, cell.px, 0, cell.py)
-        dot.Visible  = true
+        dot.Size             = UDim2.new(0, pxPerCell, 0, pxPerCell)
+        dot.Position         = UDim2.new(0, cell.px, 0, cell.py)
+        dot.BackgroundColor3 = cell.color
+        dot.Visible          = true
     end
+end
+
+-- ===================================
+-- 3D WORLD VISUALIZER
+-- ===================================
+
+local function Destroy3DParts()
+    for _, p in ipairs(State.noclip3DPartPool) do
+        pcall(function() if p and p.Parent then p:Destroy() end end)
+    end
+    State.noclip3DPartPool = {}
+end
+
+local function Update3DVisualization()
+    if not Config.NoclipVisualize3D then
+        if #State.noclip3DPartPool > 0 then Destroy3DParts() end
+        return
+    end
+
+    if tick() - State.noclipLast3DUpdate < Config.NoclipVisualize3DUpdateInterval then return end
+    State.noclipLast3DUpdate = tick()
+
+    local rootPart = GetRootPart()
+    if not rootPart then return end
+
+    local charPos  = rootPart.Position
+    local radius   = Config.NoclipVisualize3DRadius
+    local maxParts = Config.NoclipVisualize3DMaxParts
+    local pSize    = Config.NoclipVisualize3DSize
+
+    -- Gather nearby unified cells (all sources, unfiltered for 3D)
+    local nearby = {}
+    for _, entry in pairs(State.unifiedMap) do
+        local dist = (entry.position - charPos).Magnitude
+        if dist <= radius then
+            table.insert(nearby, {pos = entry.position, color = entry.color, dist = dist})
+        end
+    end
+    table.sort(nearby, function(a, b) return a.dist < b.dist end)
+
+    local count = math.min(#nearby, maxParts)
+
+    -- Hide extras
+    for i = count + 1, #State.noclip3DPartPool do
+        local p = State.noclip3DPartPool[i]
+        if p and p.Parent then p.Transparency = 1 end
+    end
+
+    for i = 1, count do
+        local cell = nearby[i]
+        local part = State.noclip3DPartPool[i]
+
+        if not part or not part.Parent then
+            part              = Instance.new("Part")
+            part.Shape        = Enum.PartType.Ball
+            part.Size         = Vector3.new(pSize, pSize, pSize)
+            part.Anchored     = true
+            part.CanCollide   = false
+            part.CanQuery     = false
+            part.CanTouch     = false
+            part.CastShadow   = false
+            part.Material     = Enum.Material.Neon
+            part.Parent       = workspace
+            State.noclip3DPartPool[i] = part
+        end
+
+        part.CFrame      = CFrame.new(cell.pos)
+        part.Color       = cell.color
+        part.Transparency = 0.25
+    end
+end
+
+function RaycastingVision.SetNoclipVisualize3D(enabled)
+    Config.NoclipVisualize3D = enabled
+    if not enabled then Destroy3DParts() end
+    Log("Noclip 3D visualizer: " .. (enabled and "ON" or "OFF"), "INFO")
 end
 
 function RaycastingVision.SetNoclipVisualizeShape(enabled)
@@ -1385,8 +1578,9 @@ function RaycastingVision.StartNoclipMapping()
             if not ok then
                 Log("Noclip scan step failed: " .. tostring(err), "WARN")
             end
-            -- Refresh minimap display (throttled internally)
+            -- Refresh 2D minimap and 3D visualizer (both throttled internally)
             pcall(UpdateNoclipMapDisplay)
+            pcall(Update3DVisualization)
             task.wait(Config.NoclipStepWait)
         end
     end)
@@ -1400,6 +1594,7 @@ function RaycastingVision.StopNoclipMapping()
     State.noclipActive     = false
     State.noclipGeneration = State.noclipGeneration + 1
     DestroyNoclipMapGui()
+    Destroy3DParts()
     Log("Noclip sphere mapping stopped", "INFO")
 end
 
