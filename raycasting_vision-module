@@ -70,7 +70,7 @@ local Config = {
     NoclipMapDisplaySize = 220,    -- Minimap pixel size (square)
     NoclipMapViewRadius = 250,     -- Studs shown around character in minimap
     NoclipMapUpdateInterval = 0.4, -- Seconds between minimap refreshes
-    NoclipTorsoFilterOffset = 4,   -- Ignore hits more than N studs below the ray origin (filters floor)
+    NoclipTorsoFilterOffset = 2,   -- Ignore hits more than N studs below the ray origin (filters floor)
     -- 3D visualizer
     NoclipVisualize3D = false,
     NoclipVisualize3DRadius = 60,
@@ -1315,15 +1315,16 @@ local function CreateNoclipMapGui()
     canvas.ClipsDescendants = true
     canvas.Parent           = panel
 
-    -- ── Character dot — always pinned to the exact centre of canvas ───────────
+    -- ── Character dot — always at canvas centre, always on top ──────────────
     local charDot = Instance.new("Frame")
     charDot.Name             = "CharDot"
     charDot.AnchorPoint      = Vector2.new(0.5, 0.5)
-    charDot.Size             = UDim2.new(0, 8, 0, 8)
+    charDot.Size             = UDim2.new(0, 10, 0, 10)
     charDot.Position         = UDim2.new(0.5, 0, 0.5, 0)
     charDot.BackgroundColor3 = Color3.new(1, 1, 1)
-    charDot.BorderSizePixel  = 0
-    charDot.ZIndex           = 6
+    charDot.BorderSizePixel  = 2
+    charDot.BorderColor3     = Color3.new(0, 0, 0)
+    charDot.ZIndex           = 20   -- always on top of data dots
     charDot.Parent           = canvas
     local charCorner = Instance.new("UICorner")
     charCorner.CornerRadius = UDim.new(1, 0)
@@ -1393,12 +1394,12 @@ local function CreateNoclipMapGui()
     end
 
     fsBtn.MouseButton1Click:Connect(function()
-        isFullscreen = not isFullscreen
         if not isFullscreen then
-            -- Save current mini position in case user dragged it
+            -- Save mini position BEFORE entering fullscreen so we can restore it
             miniPos  = panel.Position
             miniSize = panel.Size
         end
+        isFullscreen = not isFullscreen
         applyLayout()
     end)
 
@@ -1426,23 +1427,17 @@ local function UpdateNoclipMapDisplay()
     local rootPart = GetRootPart()
     if not rootPart then return end
 
-    local gui        = State.noclipMapGui
-    local canvas     = gui.canvas
-    local viewR      = Config.NoclipMapViewRadius
-    local cellSize   = math.max(1, Config.NoclipCellSize)
-    local charPos    = rootPart.Position
+    local gui      = State.noclipMapGui
+    local canvas   = gui.canvas
+    local viewR    = Config.NoclipMapViewRadius
+    local cellSize = math.max(1, Config.NoclipCellSize)
+    local charPos  = rootPart.Position
 
-    -- In fullscreen mode use the actual canvas pixel size; in minimap use config size
-    local fullscreen = gui.isFullscreen and gui.isFullscreen()
-    local ds = fullscreen
-        and math.min(canvas.AbsoluteSize.X, canvas.AbsoluteSize.Y)
-        or  Config.NoclipMapDisplaySize
+    -- Dot size as a fraction of the canvas (works at any canvas resolution)
+    -- cellSize studs / (viewR*2 studs total) = fraction of canvas per cell
+    local dotScale = cellSize / (viewR * 2)
 
-    -- Pixel size in screen-space — bigger canvas = bigger dots
-    local pxPerCell = math.max(1, math.floor(ds / (viewR * 2 / cellSize)))
-
-    -- Collect visible cells from UNIFIED map (all 3 sources combined).
-    -- 2D filter: skip floor/ceiling hits and anything too far below torso.
+    -- 2D filter: skip floor/ceiling and below-torso hits
     local minY   = charPos.Y - Config.NoclipTorsoFilterOffset
     local visible = {}
     for _, entry in pairs(State.unifiedMap) do
@@ -1450,13 +1445,15 @@ local function UpdateNoclipMapDisplay()
         local dx  = pos.X - charPos.X
         local dz  = pos.Z - charPos.Z
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
-            local n       = entry.normal
-            local isCeil  = n and math.abs(n.Y) > 0.7
-            local isLow   = entry.source == "noclip" and pos.Y < minY
+            local n      = entry.normal
+            local isCeil = n and math.abs(n.Y) > 0.6   -- skip floor/ceiling normals
+            local isLow  = entry.source == "noclip" and pos.Y < minY
             if not isCeil and not isLow then
-                local px = math.floor((dx / viewR + 1) * 0.5 * (ds - pxPerCell))
-                local py = math.floor((dz / viewR + 1) * 0.5 * (ds - pxPerCell))
-                table.insert(visible, {px = px, py = py, color = entry.color})
+                -- Map world offset to 0..1 canvas scale
+                -- dx=0 → 0.5 (centre), dx=-viewR → 0.0 (left), dx=+viewR → 1.0 (right)
+                local sx = (dx / viewR + 1) * 0.5
+                local sy = (dz / viewR + 1) * 0.5
+                table.insert(visible, {sx = sx, sy = sy, color = entry.color})
             end
         end
     end
@@ -1466,18 +1463,20 @@ local function UpdateNoclipMapDisplay()
         dot.Visible = false
     end
 
-    -- Reuse / grow pixel pool
+    -- Reuse / grow pixel pool — use Scale UDim2 so position is correct at
+    -- any canvas size (minimap OR fullscreen) without reading AbsoluteSize
     for i, cell in ipairs(visible) do
         local dot = State.noclipPixelPool[i]
         if not dot then
             dot = Instance.new("Frame")
             dot.BorderSizePixel = 0
+            dot.AnchorPoint     = Vector2.new(0.5, 0.5)
             dot.ZIndex          = 3
             dot.Parent          = canvas
             State.noclipPixelPool[i] = dot
         end
-        dot.Size             = UDim2.new(0, pxPerCell, 0, pxPerCell)
-        dot.Position         = UDim2.new(0, cell.px, 0, cell.py)
+        dot.Size             = UDim2.new(dotScale, 0, dotScale, 0)
+        dot.Position         = UDim2.new(cell.sx, 0, cell.sy, 0)
         dot.BackgroundColor3 = cell.color
         dot.Visible          = true
     end
