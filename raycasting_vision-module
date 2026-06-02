@@ -1448,14 +1448,18 @@ local function UpdateNoclipMapDisplay()
     local groundHit = workspace:Raycast(charPos, Vector3.new(0, -6, 0), groundParams)
     if groundHit then groundPart = groundHit.Instance end
 
-    -- Show every dot EXCEPT ones that hit the part the character is standing on
+    -- Hide a dot if EITHER:
+    --   1. It hit the specific part the character is standing on (catches the exact floor tile)
+    --   2. Its surface normal points mostly up/down (catches all other floor/ceiling tiles)
     local visible = {}
     for _, entry in pairs(State.unifiedMap) do
         local pos = entry.position
         local dx  = pos.X - charPos.X
         local dz  = pos.Z - charPos.Z
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
-            if not (groundPart and entry.instance == groundPart) then
+            local isFloorTile    = groundPart and entry.instance == groundPart
+            local isHorizSurface = entry.normal and math.abs(entry.normal.Y) > 0.6
+            if not isFloorTile and not isHorizSurface then
                 local sx = (dx / viewR + 1) * 0.5
                 local sy = (dz / viewR + 1) * 0.5
                 table.insert(visible, {sx = sx, sy = sy, color = entry.color})
