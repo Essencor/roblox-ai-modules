@@ -1204,7 +1204,7 @@ local function CreateNoclipMapGui()
     title.Size               = UDim2.new(1, -30, 0, titleH)
     title.Position           = UDim2.new(0, 6, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text               = "🟣 Noclip Shape Map"
+    title.Text               = "Noclip Shape Map"
     title.TextColor3         = Color3.new(0.85, 0.5, 1)
     title.TextSize           = 11
     title.Font               = Enum.Font.Code
@@ -1215,15 +1215,16 @@ local function CreateNoclipMapGui()
     -- ── Fullscreen button (top-right of panel) ───────────────────────────────
     local fsBtn = Instance.new("TextButton")
     fsBtn.Name               = "FullscreenBtn"
-    fsBtn.Size               = UDim2.new(0, 22, 0, 22)
-    fsBtn.Position           = UDim2.new(1, -26, 0, 1)
-    fsBtn.BackgroundColor3   = Color3.new(0.18, 0.18, 0.22)
+    fsBtn.Size               = UDim2.new(0, 28, 0, 20)
+    fsBtn.Position           = UDim2.new(1, -32, 0, 2)
+    fsBtn.BackgroundColor3   = Color3.new(0.55, 0.2, 0.9)
     fsBtn.BorderSizePixel    = 0
-    fsBtn.Text               = "⛶"
-    fsBtn.TextColor3         = Color3.new(0.85, 0.5, 1)
-    fsBtn.TextSize           = 14
-    fsBtn.Font               = Enum.Font.Code
+    fsBtn.Text               = "[ ]"
+    fsBtn.TextColor3         = Color3.new(1, 1, 1)
+    fsBtn.TextSize           = 11
+    fsBtn.Font               = Enum.Font.GothamBold
     fsBtn.ZIndex             = 10
+    fsBtn.AutoButtonColor    = true
     fsBtn.Parent             = panel
 
     local fsBtnCorner = Instance.new("UICorner")
@@ -1261,8 +1262,8 @@ local function CreateNoclipMapGui()
             panel.Position = UDim2.new(0, 12, 0, 12)
             canvas.Size    = UDim2.new(1, -pad*2, 1, -titleH - pad)
             canvas.Position = UDim2.new(0, pad, 0, titleH)
-            fsBtn.Text     = "✕"
-            title.Text     = "🟣 Noclip Shape Map  (fullscreen)"
+            fsBtn.Text     = "[X]"
+            title.Text     = "Noclip Shape Map  (fullscreen)"
             -- Force map refresh with new canvas size
             State.noclipLastMapUpdate = 0
         else
@@ -1271,8 +1272,8 @@ local function CreateNoclipMapGui()
             panel.Position = UDim2.new(1, -(ds + pad*2 + 12), 1, -(ds + pad*2 + titleH + 12))
             canvas.Size    = UDim2.new(0, ds, 0, ds)
             canvas.Position = UDim2.new(0, pad, 0, titleH)
-            fsBtn.Text     = "⛶"
-            title.Text     = "🟣 Noclip Shape Map"
+            fsBtn.Text     = "[ ]"
+            title.Text     = "Noclip Shape Map"
             State.noclipLastMapUpdate = 0
         end
     end
