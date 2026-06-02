@@ -1457,6 +1457,88 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     return reached
 end
 
+-- Follow a list of Vector3 waypoints from GetNoclipPath / Dijkstra.
+-- Each waypoint is a world-space position; the character walks to each in turn.
+-- Returns true if the final waypoint was reached within the arrival threshold.
+local function FollowNoclipWaypoints(waypoints, finalGoal, navigationId)
+    if not waypoints or #waypoints < 2 then return false end
+
+    local humanoid = GetHumanoid()
+    local rootPart = GetRootPart()
+    if not humanoid or not rootPart then return false end
+
+    Log("Noclip path: following " .. #waypoints .. " waypoints via spatial map", "INFO")
+
+    local arrivalDist   = Config.FinalWaypointDistance or 4
+    local waypointDist  = 5    -- consider a mid-waypoint reached at 5 studs
+    local timeout       = 60   -- max seconds for the whole noclip path
+    local startTime     = tick()
+    local lastJumpCheck = 0
+
+    for i, wp in ipairs(waypoints) do
+        local isLast = (i == #waypoints)
+        local targetPos = isLast and (finalGoal or wp) or wp
+
+        local stepTimeout = 20
+        local stepStart   = tick()
+
+        while tick() - stepStart < stepTimeout do
+            if not IsActiveNavigation(navigationId) then return false end
+            if tick() - startTime > timeout then
+                Log("Noclip path: overall timeout", "WARN")
+                return false
+            end
+
+            rootPart  = GetRootPart()
+            humanoid  = GetHumanoid()
+            if not rootPart or not humanoid then return false end
+
+            local dist = GetDistance(rootPart.Position, targetPos)
+            local threshold = isLast and arrivalDist or waypointDist
+
+            if dist <= threshold then
+                if isLast then
+                    Log("Noclip path: reached final waypoint (" .. math.floor(dist * 10) / 10 .. " studs)", "INFO")
+                    return true
+                end
+                break  -- move to next waypoint
+            end
+
+            humanoid:MoveTo(targetPos)
+            State.lastMoveTime = tick()
+
+            -- Jump check (reuse existing raycasting jump logic if available)
+            if tick() - lastJumpCheck > Config.JumpCheckInterval and HasRaycasting() then
+                lastJumpCheck = tick()
+                local nextWp = waypoints[i + 1] or targetPos
+                pcall(function()
+                    local analysis = RaycastingVision.AnalyzeMovementSegment(rootPart.Position, nextWp)
+                    if analysis and analysis.requiresJump then
+                        local h = GetHumanoid()
+                        if h and (h:GetState() == Enum.HumanoidStateType.Running
+                               or h:GetState() == Enum.HumanoidStateType.Landed
+                               or h:GetState() == Enum.HumanoidStateType.None) then
+                            h.Jump = true
+                        end
+                    end
+                end)
+            end
+
+            task.wait(0.05)
+        end
+    end
+
+    -- Fell through without explicit success — check final distance
+    rootPart = GetRootPart()
+    if rootPart then
+        local finalDist = GetDistance(rootPart.Position, finalGoal or waypoints[#waypoints])
+        if finalDist <= (Config.FinalWaypointDistance or 4) then
+            return true
+        end
+    end
+    return false
+end
+
 local function DirectMoveFallback(targetPos, navigationId, reason)
     if not Config.UseDirectFallback then
         return false
@@ -1766,6 +1848,26 @@ function PathfindingModule.Navigate(target, mode)
                         Log("🎉 Navigation succeeded!", "INFO")
                         break
                     end
+                end
+            end
+
+            -- Try noclip spatial-map path (Dijkstra) before the dumb direct fallback
+            if not success and HasRaycasting()
+            and type(RaycastingVision.GetNoclipPath) == "function" then
+                Log("🗺️  PathfindingService failed — trying noclip spatial-map path...", "INFO")
+                rootPart = GetRootPart()
+                local noclipWaypoints = rootPart and RaycastingVision.GetNoclipPath(rootPart.Position, endPos, 3000)
+                if noclipWaypoints and #noclipWaypoints >= 2 then
+                    Log("🗺️  Noclip path found (" .. #noclipWaypoints .. " waypoints), following...", "INFO")
+                    success = FollowNoclipWaypoints(noclipWaypoints, endPos, navigationId)
+                    if success then
+                        Log("🗺️  Noclip path navigation succeeded!", "INFO")
+                        break
+                    else
+                        Log("🗺️  Noclip path following failed", "WARN")
+                    end
+                else
+                    Log("🗺️  Noclip spatial map has no route yet (map may still be building)", "WARN")
                 end
             end
 
