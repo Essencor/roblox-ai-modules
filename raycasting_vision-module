@@ -1439,57 +1439,28 @@ local function UpdateNoclipMapDisplay()
     -- cellSize studs / (viewR*2 studs total) = fraction of canvas per cell
     local dotScale = cellSize / (viewR * 2)
 
-    -- Find the exact part the character's feet are touching.
-    -- Dots from that specific part instance are hidden on the 2D map.
+    -- Find the part the character's feet are touching right now
     local groundPart = nil
-    do
-        local groundParams = RaycastParams.new()
-        groundParams.FilterType = Enum.RaycastFilterType.Exclude
-        local char = GetCharacter()
-        if char then groundParams.FilterDescendantsInstances = {char} end
-        local groundHit = workspace:Raycast(charPos, Vector3.new(0, -6, 0), groundParams)
-        if groundHit then
-            groundPart = groundHit.Instance
-        end
-    end
+    local groundParams = RaycastParams.new()
+    groundParams.FilterType = Enum.RaycastFilterType.Exclude
+    local char = GetCharacter()
+    if char then groundParams.FilterDescendantsInstances = {char} end
+    local groundHit = workspace:Raycast(charPos, Vector3.new(0, -6, 0), groundParams)
+    if groundHit then groundPart = groundHit.Instance end
 
-    -- XZ deduplication: one dot per XZ column, keeping only the hit whose Y is
-    -- closest to eye/chest height. This ensures each wall segment shows as exactly
-    -- one pixel regardless of how many Y-slices the Fibonacci sphere recorded for
-    -- that wall, eliminating the dense-overlap that looks like floor data.
-    local targetY = charPos.Y + 2   -- chest/eye level
-    local cs      = math.max(1, Config.NoclipCellSize)
-    local xzBest  = {}              -- xzKey -> {sx, sy, color, dist}
-
+    -- Show every dot EXCEPT ones that hit the part the character is standing on
+    local visible = {}
     for _, entry in pairs(State.unifiedMap) do
         local pos = entry.position
         local dx  = pos.X - charPos.X
         local dz  = pos.Z - charPos.Z
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
-            local n      = entry.normal
-            local isCeil       = n and math.abs(n.Y) > 0.6
-            local isLow        = pos.Y < charPos.Y - 1
-            local isHigh       = pos.Y > charPos.Y + 8
-            local isFloorPart  = groundPart and entry.instance == groundPart
-            if not isCeil and not isLow and not isHigh and not isFloorPart then
-                local xzKey = math.floor(pos.X / cs) .. "," .. math.floor(pos.Z / cs)
-                local dist  = math.abs(pos.Y - targetY)
-                local prev  = xzBest[xzKey]
-                if not prev or dist < prev.dist then
-                    xzBest[xzKey] = {
-                        sx    = (dx / viewR + 1) * 0.5,
-                        sy    = (dz / viewR + 1) * 0.5,
-                        color = entry.color,
-                        dist  = dist,
-                    }
-                end
+            if not (groundPart and entry.instance == groundPart) then
+                local sx = (dx / viewR + 1) * 0.5
+                local sy = (dz / viewR + 1) * 0.5
+                table.insert(visible, {sx = sx, sy = sy, color = entry.color})
             end
         end
-    end
-
-    local visible = {}
-    for _, cell in pairs(xzBest) do
-        table.insert(visible, cell)
     end
 
     -- Hide all pooled pixels first
