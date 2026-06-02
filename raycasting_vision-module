@@ -846,13 +846,15 @@ end
 local function TraceDomeRay(origin, direction, shouldReflect)
     local castsUsed = 1
     local result = PerformRaycast(origin, direction, Config.DomeScanRadius, false)
-    local sourceKey = StoreDomeHit(origin, direction, result, "primary", 0, nil)
 
+    -- Visualize FIRST so a storage error can never block the ray display
     VisualizeRay(origin, direction, Config.DomeScanRadius, result, Config.RayColor)
 
     if result then
         Stats.domeHits = Stats.domeHits + 1
     end
+
+    local _ok, sourceKey = pcall(StoreDomeHit, origin, direction, result, "primary", 0, nil)
 
     if not result or not shouldReflect or not Config.ReflectionMappingEnabled then
         return castsUsed
@@ -878,12 +880,11 @@ local function TraceDomeRay(origin, direction, shouldReflect)
         Stats.reflectionRays = Stats.reflectionRays + 1
 
         local bounceResult = PerformRaycast(bounceOrigin, bounceDirection, Config.ReflectionDistance, false)
+        -- Visualize before storage so errors in StoreDomeHit can't block display
         VisualizeRay(bounceOrigin, bounceDirection, Config.ReflectionDistance, bounceResult, Config.ReflectionColor)
 
-        local nextKey = StoreDomeHit(bounceOrigin, bounceDirection, bounceResult, "reflection", bounce, sourceKey)
-        if bounceResult then
-            Stats.reflectionHits = Stats.reflectionHits + 1
-        end
+        if bounceResult then Stats.reflectionHits = Stats.reflectionHits + 1 end
+        local _ok2, nextKey = pcall(StoreDomeHit, bounceOrigin, bounceDirection, bounceResult, "reflection", bounce, sourceKey)
 
         if not bounceResult then
             -- Ray traveled full ReflectionDistance without hitting anything
@@ -998,6 +999,10 @@ function RaycastingVision.StartDomeMapping(options)
             if not ok then
                 Log("Dome mapping step failed: " .. tostring(err), "WARN")
             end
+
+            -- Also drive the 3D visualizer from the dome loop so it works
+            -- even when noclip mapping hasn't started yet
+            pcall(Update3DVisualization)
 
             task.wait(Config.DomeStepWait)
         end
@@ -1445,14 +1450,14 @@ local function UpdateNoclipMapDisplay()
         local dx  = pos.X - charPos.X
         local dz  = pos.Z - charPos.Z
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
-            -- Floor/ceiling filter (noclip entries carry normals)
-            local n = entry.normal
-            if n and math.abs(n.Y) > 0.7 then continue end
-            -- Below-torso filter (only for noclip; dome/reflection are wall-only already)
-            if entry.source == "noclip" and pos.Y < minY then continue end
-            local px = math.floor((dx / viewR + 1) * 0.5 * (ds - pxPerCell))
-            local py = math.floor((dz / viewR + 1) * 0.5 * (ds - pxPerCell))
-            table.insert(visible, {px = px, py = py, color = entry.color})
+            local n       = entry.normal
+            local isCeil  = n and math.abs(n.Y) > 0.7
+            local isLow   = entry.source == "noclip" and pos.Y < minY
+            if not isCeil and not isLow then
+                local px = math.floor((dx / viewR + 1) * 0.5 * (ds - pxPerCell))
+                local py = math.floor((dz / viewR + 1) * 0.5 * (ds - pxPerCell))
+                table.insert(visible, {px = px, py = py, color = entry.color})
+            end
         end
     end
 
@@ -1550,13 +1555,25 @@ end
 
 function RaycastingVision.SetNoclipVisualize3D(enabled)
     Config.NoclipVisualize3D = enabled
-    if not enabled then Destroy3DParts() end
+    if enabled then
+        -- Auto-start mapping so the 3D view has data immediately
+        RaycastingVision.StartNoclipMapping()
+        RaycastingVision.StartDomeMapping()
+    else
+        Destroy3DParts()
+    end
     Log("Noclip 3D visualizer: " .. (enabled and "ON" or "OFF"), "INFO")
 end
 
 function RaycastingVision.SetNoclipVisualizeShape(enabled)
     Config.NoclipVisualizeShape = enabled
-    if not enabled then DestroyNoclipMapGui() end
+    if enabled then
+        -- Auto-start mapping so the map has data immediately
+        RaycastingVision.StartNoclipMapping()
+        RaycastingVision.StartDomeMapping()
+    else
+        DestroyNoclipMapGui()
+    end
     Log("Noclip shape visualizer: " .. (enabled and "ON" or "OFF"), "INFO")
 end
 
