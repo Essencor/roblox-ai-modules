@@ -680,31 +680,6 @@ local Noclip3DToggle = ModulesTab:CreateToggle({
    end
 })
 
-local MapSection = ModulesTab:CreateSection("Map Settings")
-
-local InfiniteZoomToggle = ModulesTab:CreateToggle({
-   Name = "Infinite Zoom",
-   CurrentValue = false,
-   Flag = "NoclipInfiniteZoom",
-   Callback = function(value)
-      if not Config.RaycastingEnabled or not LoadedModules.Raycasting then
-         Rayfield:Notify({
-            Title = "Module Not Loaded",
-            Content = "Enable Raycasting module first!",
-            Duration = 3,
-            Image = 4483362458
-         })
-         return
-      end
-      if type(LoadedModules.Raycasting.SetNoclipInfiniteZoom) == "function" then
-         LoadedModules.Raycasting.SetNoclipInfiniteZoom(value)
-      else
-         LoadedModules.Raycasting.SetConfig("NoclipInfiniteZoom", value)
-      end
-      RaycastingStatusLabel:Set("Infinite zoom: " .. (value and "ON" or "OFF"))
-   end
-})
-
 ]==]
 
 source = source:gsub(
@@ -777,7 +752,33 @@ source = source:gsub(
 source = source:gsub(
 	'SettingsTab = Window:CreateTab%("Settings", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%("Information"%)',
 	function()
-		return 'SettingsTab = Window:CreateTab("Settings", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection("Information")'
+		return [[SettingsTab = Window:CreateTab("Settings", 4483362458)
+
+do
+local InfiniteCameraZoomPrevious = nil
+local InfiniteCameraZoomToggle = SettingsTab:CreateToggle({
+   Name = "Infinite Camera Zoom",
+   CurrentValue = false,
+   Flag = "InfiniteCameraZoom",
+   Callback = function(value)
+      local host = LocalPlayer or game:GetService("Players").LocalPlayer
+      if not host then
+         return
+      end
+
+      if value then
+         if InfiniteCameraZoomPrevious == nil then
+            InfiniteCameraZoomPrevious = host.CameraMaxZoomDistance
+         end
+         host.CameraMaxZoomDistance = math.huge
+      elseif InfiniteCameraZoomPrevious ~= nil then
+         host.CameraMaxZoomDistance = InfiniteCameraZoomPrevious
+         InfiniteCameraZoomPrevious = nil
+      end
+   end
+})
+
+local InfoSection = SettingsTab:CreateSection("Information")]]
 	end,
 	1
 )
