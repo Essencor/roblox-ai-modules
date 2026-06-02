@@ -552,6 +552,53 @@ local RaycastingVisualizationToggle = ModulesTab:CreateToggle({
    end
 })
 
+local NoclipShapeToggle = ModulesTab:CreateToggle({
+   Name = "Visualize Shape (Noclip Map)",
+   CurrentValue = false,
+   Flag = "NoclipVisualizeShape",
+   Callback = function(value)
+      if not Config.RaycastingEnabled or not LoadedModules.Raycasting then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Raycasting module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+
+      if type(LoadedModules.Raycasting.SetNoclipVisualizeShape) ~= "function" then
+         Rayfield:Notify({
+            Title = "Not Available",
+            Content = "Update raycasting module to latest version.",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+
+      LoadedModules.Raycasting.SetNoclipVisualizeShape(value)
+
+      if value then
+         RaycastingStatusLabel:Set("Noclip shape map: ON")
+         Rayfield:Notify({
+            Title = "Shape Map Enabled",
+            Content = "Purple noclip map visible in bottom-right corner.",
+            Duration = 4,
+            Image = 4483362458
+         })
+      else
+         RaycastingStatusLabel:Set("Noclip shape map: OFF")
+         Rayfield:Notify({
+            Title = "Shape Map Disabled",
+            Content = "Noclip minimap hidden.",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
 ]==]
 
 source = source:gsub(
@@ -654,3 +701,4 @@ if not okRun then
 end
 
 print("[SS Chatbot] original hub started")
+
