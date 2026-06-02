@@ -1474,15 +1474,13 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             end
         end
 
-        -- MINIMAL stuck detection - only if completely stuck (no progress at all)
-        if tick() - State.lastMoveTime > 5 then  -- 5 seconds of NO progress at all
+        -- Stuck detection: check every 0.4 s of no progress
+        if tick() - State.lastMoveTime > 0.4 then
             if State.stuckCount >= Config.MaxStuckAttempts then
                 Log("❌ Completely stuck (" .. State.stuckCount .. "/" .. Config.MaxStuckAttempts .. ")", "ERROR")
                 return false
             end
-            -- Quick recovery without pausing
-            humanoid.Jump = true
-            State.stuckCount = State.stuckCount + 1
+            RecoverFromStuck("wall")
             State.lastMoveTime = tick()
         end
 
