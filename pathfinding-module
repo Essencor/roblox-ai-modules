@@ -100,6 +100,7 @@ local State = {
     startTime = 0,
     lastPosition = nil,
     lastMoveTime = 0,
+    lastJumpTime = 0,  -- shared across all waypoints so cooldown persists
     stuckCount = 0,
     visualizations = {},
     destinationMarker = nil,
@@ -1304,7 +1305,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
     if waypointIndex == 1 and not isFinalWaypoint then
         reachedDistance = Config.FirstWaypointReachedDistance
     end
-    local lastJumpTime = 0
+    -- lastJumpTime lives in State so the cooldown persists across waypoints
 
     if isFinalWaypoint then
         Log("Moving to FINAL waypoint " .. waypointIndex .. "/" .. totalWaypoints .. " (lenient: " .. reachedDistance .. " studs)", "INFO")
@@ -1341,7 +1342,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             if needsJump then
                 Log("⚡ Pre-check: Jump needed immediately! Type: " .. tostring(jumpType))
                 ExecuteJump(jumpType)
-                lastJumpTime = tick()
+                State.lastJumpTime = tick()
             end
         end
     end
@@ -1414,9 +1415,9 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
                 or hState == Enum.HumanoidStateType.Landed
                 or hState == Enum.HumanoidStateType.None
             local wallClose = wallStuckSince ~= nil  -- wall scan already flagged it
-            if isGrounded and tick() - lastJumpTime > 0.8 and not wallClose then
+            if isGrounded and tick() - State.lastJumpTime > 0.8 and not wallClose then
                 humanoid.Jump = true
-                lastJumpTime = tick()
+                State.lastJumpTime = tick()
             end
             lastMoveToTime = tick()
             lastProgressTime = tick()
@@ -1466,10 +1467,10 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
                     or hState2 == Enum.HumanoidStateType.None
                 if grounded2 then
                     local needsJump, jumpType = CheckJumpRequired(currentPos, waypointPos)
-                    if needsJump and tick() - lastJumpTime > 0.8 then
+                    if needsJump and tick() - State.lastJumpTime > 0.8 then
                         Log("⚡ Jump needed: " .. tostring(jumpType))
                         ExecuteJump(jumpType)
-                        lastJumpTime = tick()
+                        State.lastJumpTime = tick()
                     end
                 end
                 lastJumpCheck = tick()
@@ -1774,7 +1775,8 @@ function PathfindingModule.Navigate(target, mode)
     State.navigationId = State.navigationId + 1
     local navigationId = State.navigationId
 
-    State.stuckCount = 0
+    State.stuckCount   = 0
+    State.lastJumpTime = 0
     State.lastMoveTime = tick()
     State.positionHistory = {}
     State.consecutiveStuckFrames = 0
