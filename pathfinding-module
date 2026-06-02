@@ -445,9 +445,11 @@ local function FindClearPathWithVision()
     local circularScan = RaycastingVision.ScanCircular(15, 16)
 
     if circularScan and #circularScan.clearDirections > 0 then
-        -- Pick the clearest direction
-        local bestDirection = circularScan.clearDirections[1]
-        Log("Found clear direction using vision", "INFO")
+        -- clearDirections contains angles in degrees; convert to world-space Vector3
+        local angle = circularScan.clearDirections[1]
+        local rad   = math.rad(angle)
+        local bestDirection = Vector3.new(math.sin(rad), 0, math.cos(rad))
+        Log("Found clear direction using vision (angle: " .. math.floor(angle) .. "°)", "INFO")
         return bestDirection
     end
 
