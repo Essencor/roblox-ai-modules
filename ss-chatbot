@@ -408,6 +408,25 @@ source = source:gsub(
 	1
 )
 
+-- Fix AutoGreet toggle: it guards with Config.PathfindingEnabled which may be false
+-- at init time even when the module is loaded. Replace with a live module check.
+source = source:gsub(
+	'if not Config%.PathfindingEnabled then%s*\n%s*Rayfield:Notify%(%{%s*\n%s*Title = ".- Pathfinding Required".-end%s*\n%s*Config%.EnableAutoGreet = false%s*\n%s*return%s*\n%s*end',
+	function()
+		return [[if not LoadedModules.Pathfinding then
+         Rayfield:Notify({
+            Title = "Pathfinding Required",
+            Content = "Enable the Pathfinding module first for auto-greet!",
+            Duration = 4,
+            Image = 4483362458
+         })
+         Config.EnableAutoGreet = false
+         return
+      end]]
+	end,
+	1
+)
+
 local raycastingModuleBlock = [==[
 -- ========================================
 -- RAYCASTING VISION MODULE
