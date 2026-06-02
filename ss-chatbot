@@ -583,7 +583,7 @@ local NoclipShapeToggle = ModulesTab:CreateToggle({
          RaycastingStatusLabel:Set("Noclip shape map: ON")
          Rayfield:Notify({
             Title = "Shape Map Enabled",
-            Content = "Purple noclip map visible in bottom-right corner.",
+            Content = "Drag the title bar to move. Press [ ] to fullscreen.",
             Duration = 4,
             Image = 4483362458
          })
@@ -592,6 +592,53 @@ local NoclipShapeToggle = ModulesTab:CreateToggle({
          Rayfield:Notify({
             Title = "Shape Map Disabled",
             Content = "Noclip minimap hidden.",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local Noclip3DToggle = ModulesTab:CreateToggle({
+   Name = "3D Visualize Map",
+   CurrentValue = false,
+   Flag = "NoclipVisualize3D",
+   Callback = function(value)
+      if not Config.RaycastingEnabled or not LoadedModules.Raycasting then
+         Rayfield:Notify({
+            Title = "Module Not Loaded",
+            Content = "Enable Raycasting module first!",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+
+      if type(LoadedModules.Raycasting.SetNoclipVisualize3D) ~= "function" then
+         Rayfield:Notify({
+            Title = "Not Available",
+            Content = "Update raycasting module to latest version.",
+            Duration = 3,
+            Image = 4483362458
+         })
+         return
+      end
+
+      LoadedModules.Raycasting.SetNoclipVisualize3D(value)
+
+      if value then
+         RaycastingStatusLabel:Set("3D map: ON")
+         Rayfield:Notify({
+            Title = "3D Map Enabled",
+            Content = "Glowing orbs show mapped geometry in the world.",
+            Duration = 4,
+            Image = 4483362458
+         })
+      else
+         RaycastingStatusLabel:Set("3D map: OFF")
+         Rayfield:Notify({
+            Title = "3D Map Disabled",
+            Content = "3D world orbs removed.",
             Duration = 3,
             Image = 4483362458
          })
