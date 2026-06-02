@@ -106,7 +106,7 @@ local Config = {
     -- Visualization
     ShowRays = false,
     RayVisualizeEveryN  = 6,    -- show 1 in every N rays (reduce visual clutter)
-    RayVisualLifetime   = 0.3,  -- seconds before a ray visual fades
+    RayVisualLifetime   = 0.7,  -- seconds before a ray visual fades
     RayPoolSize         = 120,  -- pre-allocated Part pool (ring buffer)
     ShowObstacles = false,
     ShowSafeZones = false,
