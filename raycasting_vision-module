@@ -58,7 +58,7 @@ local Config = {
     -- Noclip sphere mapping (wall-penetrating)
     NoclipEnabled = true,
     NoclipSphereRays = 300,        -- Fibonacci sphere ray count (more = better spatial coverage)
-    NoclipMaxDistance = 500,       -- Max distance each noclip ray travels
+    NoclipMaxDistance = 1000,      -- Max distance each noclip ray travels
     NoclipCellSize = 4,            -- Grid cell size for spatial map (studs)
     NoclipCellTTL = 120,           -- How long a mapped cell persists (seconds)
     NoclipMaxCells = 10000,        -- Max cells in the noclip map
@@ -66,6 +66,10 @@ local Config = {
     NoclipRaysPerStep = 8,         -- Rays cast per background tick
     NoclipStepWait = 0.05,         -- Seconds between background steps
     NoclipMaxHitsPerRay = 60,      -- Max wall penetrations per single ray
+    NoclipVisualizeShape = false,  -- Show noclip map minimap in bottom-right corner
+    NoclipMapDisplaySize = 220,    -- Minimap pixel size (square)
+    NoclipMapViewRadius = 250,     -- Studs shown around character in minimap
+    NoclipMapUpdateInterval = 0.4, -- Seconds between minimap refreshes
 
     -- Reflection mapping
     ReflectionMappingEnabled = true,
@@ -123,7 +127,10 @@ local State = {
     noclipGeneration = 0,
     noclipRayIndex = 0,
     noclipDirections = nil,
-    noclipLastFullScan = 0
+    noclipLastFullScan = 0,
+    noclipMapGui = nil,
+    noclipPixelPool = {},
+    noclipLastMapUpdate = 0
 }
 
 -- Statistics
@@ -1145,6 +1152,158 @@ function RaycastingVision.StepNoclipScan(rayBudget)
     }
 end
 
+-- ── Minimap GUI ──────────────────────────────────────────────────────────────
+
+local function DestroyNoclipMapGui()
+    if State.noclipMapGui then
+        pcall(function() State.noclipMapGui.screenGui:Destroy() end)
+        State.noclipMapGui = nil
+        State.noclipPixelPool = {}
+    end
+end
+
+local function CreateNoclipMapGui()
+    DestroyNoclipMapGui()
+
+    local player = Players.LocalPlayer
+    if not player then return end
+
+    local ds   = Config.NoclipMapDisplaySize   -- display px
+    local pad  = 8
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name             = "NoclipShapeDisplay"
+    screenGui.ResetOnSpawn     = false
+    screenGui.ZIndexBehavior   = Enum.ZIndexBehavior.Sibling
+    screenGui.IgnoreGuiInset   = true
+    screenGui.Parent           = player.PlayerGui
+
+    -- Outer panel ─ bottom-right corner
+    local panel = Instance.new("Frame")
+    panel.Name                    = "Panel"
+    panel.Size                    = UDim2.new(0, ds + pad * 2, 0, ds + pad * 2 + 20)
+    panel.Position                = UDim2.new(1, -(ds + pad * 2 + 12),
+                                              1, -(ds + pad * 2 + 20 + 12))
+    panel.BackgroundColor3        = Color3.new(0, 0, 0)
+    panel.BackgroundTransparency  = 0.45
+    panel.BorderSizePixel         = 0
+    panel.Parent                  = screenGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = panel
+
+    -- Title bar
+    local title = Instance.new("TextLabel")
+    title.Name               = "Title"
+    title.Size               = UDim2.new(1, 0, 0, 18)
+    title.Position           = UDim2.new(0, 0, 0, 2)
+    title.BackgroundTransparency = 1
+    title.Text               = "🟣 Noclip Shape Map"
+    title.TextColor3         = Color3.new(0.85, 0.5, 1)
+    title.TextSize           = 11
+    title.Font               = Enum.Font.Code
+    title.TextXAlignment     = Enum.TextXAlignment.Center
+    title.Parent             = panel
+
+    -- Canvas (the actual map area)
+    local canvas = Instance.new("Frame")
+    canvas.Name               = "Canvas"
+    canvas.Size               = UDim2.new(0, ds, 0, ds)
+    canvas.Position           = UDim2.new(0, pad, 0, 20)
+    canvas.BackgroundColor3   = Color3.new(0.04, 0.04, 0.06)
+    canvas.BorderSizePixel    = 0
+    canvas.ClipsDescendants   = true
+    canvas.Parent             = panel
+
+    -- Cross-hair: character position indicator (centre)
+    local charDot = Instance.new("Frame")
+    charDot.Name              = "CharDot"
+    charDot.Size              = UDim2.new(0, 6, 0, 6)
+    charDot.Position          = UDim2.new(0.5, -3, 0.5, -3)
+    charDot.BackgroundColor3  = Color3.new(1, 1, 1)
+    charDot.BorderSizePixel   = 0
+    charDot.ZIndex            = 5
+    charDot.Parent            = canvas
+
+    local charCorner = Instance.new("UICorner")
+    charCorner.CornerRadius = UDim.new(1, 0)
+    charCorner.Parent = charDot
+
+    State.noclipMapGui = {
+        screenGui  = screenGui,
+        canvas     = canvas,
+    }
+    State.noclipPixelPool = {}
+end
+
+local function UpdateNoclipMapDisplay()
+    if not Config.NoclipVisualizeShape then
+        if State.noclipMapGui then DestroyNoclipMapGui() end
+        return
+    end
+
+    if not State.noclipMapGui then CreateNoclipMapGui() end
+    if not State.noclipMapGui then return end
+
+    if tick() - State.noclipLastMapUpdate < Config.NoclipMapUpdateInterval then return end
+    State.noclipLastMapUpdate = tick()
+
+    local rootPart = GetRootPart()
+    if not rootPart then return end
+
+    local canvas     = State.noclipMapGui.canvas
+    local ds         = Config.NoclipMapDisplaySize
+    local viewR      = Config.NoclipMapViewRadius
+    local cellSize   = math.max(1, Config.NoclipCellSize)
+    local charPos    = rootPart.Position
+
+    -- Pixel size in screen-space (studs-per-cell → pixels-per-cell)
+    local pxPerCell  = math.max(1, math.floor(ds / (viewR * 2 / cellSize)))
+
+    -- Collect visible solid cells
+    local visible = {}
+    for _, entry in pairs(State.noclipMap) do
+        local dx = entry.position.X - charPos.X
+        local dz = entry.position.Z - charPos.Z
+        if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
+            -- Map world offset → pixel position (top-down: X→right, Z→down)
+            local px = math.floor((dx / viewR + 1) * 0.5 * (ds - pxPerCell))
+            local py = math.floor((dz / viewR + 1) * 0.5 * (ds - pxPerCell))
+            table.insert(visible, {px = px, py = py})
+        end
+    end
+
+    -- Hide all pooled pixels first
+    for _, dot in ipairs(State.noclipPixelPool) do
+        dot.Visible = false
+    end
+
+    -- Reuse / grow pixel pool
+    for i, cell in ipairs(visible) do
+        local dot = State.noclipPixelPool[i]
+        if not dot then
+            dot = Instance.new("Frame")
+            dot.BorderSizePixel   = 0
+            dot.BackgroundColor3  = Config.NoclipColor
+            dot.ZIndex            = 3
+            dot.Parent            = canvas
+            State.noclipPixelPool[i] = dot
+        end
+        dot.Size     = UDim2.new(0, pxPerCell, 0, pxPerCell)
+        dot.Position = UDim2.new(0, cell.px, 0, cell.py)
+        dot.Visible  = true
+    end
+end
+
+function RaycastingVision.SetNoclipVisualizeShape(enabled)
+    Config.NoclipVisualizeShape = enabled
+    if not enabled then DestroyNoclipMapGui() end
+    Log("Noclip shape visualizer: " .. (enabled and "ON" or "OFF"), "INFO")
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+
 function RaycastingVision.StartNoclipMapping()
     if not Config.NoclipEnabled then return false end
     if State.noclipActive then return true end
@@ -1165,6 +1324,8 @@ function RaycastingVision.StartNoclipMapping()
             if not ok then
                 Log("Noclip scan step failed: " .. tostring(err), "WARN")
             end
+            -- Refresh minimap display (throttled internally)
+            pcall(UpdateNoclipMapDisplay)
             task.wait(Config.NoclipStepWait)
         end
     end)
@@ -1175,8 +1336,9 @@ function RaycastingVision.StartNoclipMapping()
 end
 
 function RaycastingVision.StopNoclipMapping()
-    State.noclipActive    = false
+    State.noclipActive     = false
     State.noclipGeneration = State.noclipGeneration + 1
+    DestroyNoclipMapGui()
     Log("Noclip sphere mapping stopped", "INFO")
 end
 
