@@ -150,7 +150,8 @@ local State = {
     unifiedMapOrder = {},
     -- 3D visualizer
     noclip3DPartPool = {},
-    noclipLast3DUpdate = 0
+    noclipLast3DUpdate = 0,
+    previousCameraMaxZoomDistance = nil
 }
 
 -- Statistics
@@ -1712,6 +1713,19 @@ end
 
 function RaycastingVision.SetNoclipInfiniteZoom(enabled)
     Config.NoclipInfiniteZoom = enabled
+
+    local host = Players.LocalPlayer
+    if host then
+        if enabled then
+            if State.previousCameraMaxZoomDistance == nil then
+                State.previousCameraMaxZoomDistance = host.CameraMaxZoomDistance
+            end
+            host.CameraMaxZoomDistance = math.huge
+        elseif State.previousCameraMaxZoomDistance ~= nil then
+            host.CameraMaxZoomDistance = State.previousCameraMaxZoomDistance
+            State.previousCameraMaxZoomDistance = nil
+        end
+    end
 
     if State.noclipMapGui and State.noclipMapGui.setZoom then
         local currentZoom = State.noclipMapGui.getZoom and State.noclipMapGui.getZoom() or 1
