@@ -1437,8 +1437,13 @@ local function UpdateNoclipMapDisplay()
     -- cellSize studs / (viewR*2 studs total) = fraction of canvas per cell
     local dotScale = cellSize / (viewR * 2)
 
-    -- 2D filter: skip floor/ceiling and below-torso hits
-    local minY   = charPos.Y - Config.NoclipTorsoFilterOffset
+    -- 2D filter: show only a vertical "slice" at the character's current height.
+    -- This is always relative to charPos.Y, so it works correctly whether the
+    -- character is at ground level or elevated on a platform.
+    --   minY = 1 stud below HRP  (filters the floor which sits ~3 studs below HRP)
+    --   maxY = 8 studs above HRP (shows walls up to roughly ceiling height)
+    local minY = charPos.Y - 1
+    local maxY = charPos.Y + 8
     local visible = {}
     for _, entry in pairs(State.unifiedMap) do
         local pos = entry.position
@@ -1446,9 +1451,10 @@ local function UpdateNoclipMapDisplay()
         local dz  = pos.Z - charPos.Z
         if math.abs(dx) <= viewR and math.abs(dz) <= viewR then
             local n      = entry.normal
-            local isCeil = n and math.abs(n.Y) > 0.6   -- skip floor/ceiling normals
-            local isLow  = entry.source == "noclip" and pos.Y < minY
-            if not isCeil and not isLow then
+            local isCeil = n and math.abs(n.Y) > 0.6   -- skip floor/ceiling surfaces
+            local isLow  = pos.Y < minY                 -- below the slice
+            local isHigh = pos.Y > maxY                 -- above the slice
+            if not isCeil and not isLow and not isHigh then
                 -- Map world offset to 0..1 canvas scale
                 -- dx=0 → 0.5 (centre), dx=-viewR → 0.0 (left), dx=+viewR → 1.0 (right)
                 local sx = (dx / viewR + 1) * 0.5
