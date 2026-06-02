@@ -753,10 +753,7 @@ local function RecoverFromStuck(stuckType)
 
     if recoveryMethod == 1 then
         Log("Recovery 1/8: Double Jump")
-        for i = 1, 2 do
-            humanoid.Jump = true
-            task.wait(0.2)
-        end
+        SafeJump(humanoid)
 
     elseif recoveryMethod == 2 then
         Log("Recovery 2/8: Move backwards")
@@ -783,8 +780,7 @@ local function RecoverFromStuck(stuckType)
 
     elseif recoveryMethod == 6 then
         Log("Recovery 6/8: Jump backwards")
-        humanoid.Jump = true
-        task.wait(0.1)
+        SafeJump(humanoid)
         local backwardPos = rootPart.Position - rootPart.CFrame.LookVector * 8
         humanoid:MoveTo(backwardPos)
         task.wait(1)
@@ -820,10 +816,27 @@ end
 -- JUMP EXECUTION (NATURAL)
 -- ===================================
 
+-- Single cooldown owner for ALL jumps in the module.
+-- force=true bypasses the cooldown (seat ejection only).
+local JUMP_COOLDOWN = 0.9
+local function SafeJump(humanoid, force)
+    if not humanoid then return false end
+    if not force and tick() - State.lastJumpTime < JUMP_COOLDOWN then
+        return false
+    end
+    humanoid.Jump = true
+    State.lastJumpTime = tick()
+    return true
+end
+
 local function ExecuteJump(jumpType)
     local humanoid = GetHumanoid()
     local rootPart = GetRootPart()
     if not humanoid or not rootPart then return false end
+
+    -- Hard rate-limit: ExecuteJump is the final gate for all jump paths
+    if tick() - State.lastJumpTime < JUMP_COOLDOWN then return false end
+    State.lastJumpTime = tick()
 
     Log("Executing jump: " .. (jumpType or "normal"))
     Stats.jumpsExecuted = Stats.jumpsExecuted + 1
@@ -1273,7 +1286,7 @@ local function TryUseLadder(ladderHit, targetPos, navigationId)
         end
 
         humanoid:MoveTo(top)
-        humanoid.Jump = true
+        SafeJump(humanoid)
         pcall(function()
             humanoid:ChangeState(Enum.HumanoidStateType.Climbing)
         end)
@@ -1326,7 +1339,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             ExecuteJump("normal")
         else
             Log("PathfindingService jump - using simple jump")
-            humanoid.Jump = true
+            SafeJump(humanoid)
         end
     end
 
@@ -1415,9 +1428,8 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
                 or hState == Enum.HumanoidStateType.Landed
                 or hState == Enum.HumanoidStateType.None
             local wallClose = wallStuckSince ~= nil  -- wall scan already flagged it
-            if isGrounded and tick() - State.lastJumpTime > 0.8 and not wallClose then
-                humanoid.Jump = true
-                State.lastJumpTime = tick()
+            if isGrounded and not wallClose then
+                SafeJump(humanoid)
             end
             lastMoveToTime = tick()
             lastProgressTime = tick()
@@ -1453,7 +1465,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
         -- CRITICAL: Check if seated and eject immediately (no wait)
         local humanoidState = humanoid:GetState()
         if humanoidState == Enum.HumanoidStateType.Seated then
-            humanoid.Jump = true
+            SafeJump(humanoid, true)  -- force: seat ejection bypasses cooldown
             humanoid:ChangeState(Enum.HumanoidStateType.Running)
         end
 
@@ -1567,7 +1579,7 @@ local function FollowNoclipWaypoints(waypoints, finalGoal, navigationId)
                         if h and (h:GetState() == Enum.HumanoidStateType.Running
                                or h:GetState() == Enum.HumanoidStateType.Landed
                                or h:GetState() == Enum.HumanoidStateType.None) then
-                            h.Jump = true
+                            SafeJump(h)
                         end
                     end
                 end)
@@ -1659,7 +1671,7 @@ local function DirectMoveFallback(targetPos, navigationId, reason)
 
         if tick() - lastProgressTime > 1.2 then
             humanoid:MoveTo(targetPos)
-            humanoid.Jump = true
+            SafeJump(humanoid)
             lastProgressTime = tick()
         end
 
