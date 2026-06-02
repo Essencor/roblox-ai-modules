@@ -39,17 +39,17 @@ local Config = {
     
     -- Performance
     CacheTimeout = 0.3,            -- Reduced from 0.5 for more frequent updates
-    MaxRaysPerFrame = 120,         -- High budget for aggressive maze mapping
+    MaxRaysPerFrame = 200,         -- Very high budget for 2x ray coverage
     UpdateInterval = 0.15,         -- Reduced from 0.2 for faster updates
     
     -- Background dome mapping
     DomeMappingEnabled = true,
     DomeScanRadius = 500,
-    DomeHorizontalSteps = 36,
+    DomeHorizontalSteps = 72,       -- 2x rays for 2x reflection coverage
     DomeVerticalSteps = 9,
     DomePitchMin = -15,
     DomePitchMax = 15,
-    DomeRaysPerStep = 16,
+    DomeRaysPerStep = 32,           -- Process 2x rays per step to keep up with 2x horizontal steps
     DomeStepWait = 0.01,
     DomeMapCellSize = 6,
     DomeMapEntryTTL = 60,           -- Keep mapped cells for 60s
