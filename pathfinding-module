@@ -1474,8 +1474,10 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             end
         end
 
-        -- Stuck detection: check every 0.4 s of no progress
-        if tick() - State.lastMoveTime > 0.4 then
+        -- Stuck detection: check every 0.4s of no progress.
+        -- Skip if already within arrival range — the character is settling,
+        -- not stuck. Calling recovery here would push them away from the goal.
+        if tick() - State.lastMoveTime > 0.4 and distance > reachedDistance * 1.5 then
             if State.stuckCount >= Config.MaxStuckAttempts then
                 Log("❌ Completely stuck (" .. State.stuckCount .. "/" .. Config.MaxStuckAttempts .. ")", "ERROR")
                 return false
