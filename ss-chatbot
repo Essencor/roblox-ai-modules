@@ -696,7 +696,11 @@ local InfiniteZoomToggle = ModulesTab:CreateToggle({
          })
          return
       end
-      LoadedModules.Raycasting.SetConfig("NoclipInfiniteZoom", value)
+      if type(LoadedModules.Raycasting.SetNoclipInfiniteZoom) == "function" then
+         LoadedModules.Raycasting.SetNoclipInfiniteZoom(value)
+      else
+         LoadedModules.Raycasting.SetConfig("NoclipInfiniteZoom", value)
+      end
       RaycastingStatusLabel:Set("Infinite zoom: " .. (value and "ON" or "OFF"))
    end
 })

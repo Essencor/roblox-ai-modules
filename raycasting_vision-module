@@ -78,6 +78,12 @@ local Config = {
     NoclipVisualize3DUpdateInterval = 1.0,
     NoclipVisualize3DSize = 0.35,
     NoclipInfiniteZoom = false,    -- Remove zoom clamp when enabled
+    NoclipZoomMin = 0.05,
+    NoclipZoomMax = 20,
+    NoclipInfiniteZoomMin = 0.00001,
+    NoclipInfiniteZoomMax = 100000,
+    NoclipMapDotMinPixels = 1,
+    NoclipMapDotMaxPixels = 18,
 
     -- Reflection mapping
     ReflectionMappingEnabled = true,
@@ -1364,7 +1370,15 @@ local function CreateNoclipMapGui()
     local panStartZ      = 0
 
     local function effectiveViewR()
-        return Config.NoclipMapViewRadius / zoom
+        return Config.NoclipMapViewRadius / math.max(zoom, Config.NoclipInfiniteZoomMin)
+    end
+
+    local function clampZoom(value)
+        if Config.NoclipInfiniteZoom then
+            return math.clamp(value, Config.NoclipInfiniteZoomMin, Config.NoclipInfiniteZoomMax)
+        end
+
+        return math.clamp(value, Config.NoclipZoomMin, Config.NoclipZoomMax)
     end
 
     canvas.InputBegan:Connect(function(inp)
@@ -1387,11 +1401,7 @@ local function CreateNoclipMapGui()
             and mpos.Y >= cpos.Y and mpos.Y <= cpos.Y + csz.Y then
                 local delta = inp.Position.Z  -- +1 = scroll up = zoom in
                 local newZoom = zoom * (delta > 0 and 1.25 or 0.8)
-                if Config.NoclipInfiniteZoom then
-                    zoom = math.max(0.000001, newZoom)
-                else
-                    zoom = math.clamp(newZoom, 0.05, 20)
-                end
+                zoom = clampZoom(newZoom)
                 State.noclipLastMapUpdate = 0
             end
         end
@@ -1506,6 +1516,7 @@ local function CreateNoclipMapGui()
         getPanX      = function() return panX end,
         getPanZ      = function() return panZ end,
         getZoom      = function() return zoom end,
+        setZoom      = function(value) zoom = clampZoom(value) end,
     }
     State.noclipPixelPool = {}
 end
@@ -1534,12 +1545,14 @@ local function UpdateNoclipMapDisplay()
     local zoom     = gui.getZoom and gui.getZoom() or 1.0
     local panX     = gui.getPanX and gui.getPanX() or 0
     local panZ     = gui.getPanZ and gui.getPanZ() or 0
-    local viewR    = Config.NoclipMapViewRadius / zoom   -- effective radius
+    local viewR    = Config.NoclipMapViewRadius / math.max(zoom, Config.NoclipInfiniteZoomMin)   -- effective radius
     local centerX  = charPos.X + panX
     local centerZ  = charPos.Z + panZ
 
-    -- Dot size scales with zoom (smaller viewR = bigger dots)
-    local dotScale = cellSize / (viewR * 2)
+    -- Dot size scales with zoom but keeps at least a real pixel visible.
+    local canvasSize = canvas.AbsoluteSize
+    local dotPixels = (cellSize / (viewR * 2)) * math.max(canvasSize.X, canvasSize.Y, 1)
+    dotPixels = math.clamp(dotPixels, Config.NoclipMapDotMinPixels, Config.NoclipMapDotMaxPixels)
 
     -- Update character dot position to reflect pan (may be off-centre when panned)
     local charDot = canvas:FindFirstChild("CharDot")
@@ -1594,7 +1607,7 @@ local function UpdateNoclipMapDisplay()
             dot.Parent          = canvas
             State.noclipPixelPool[i] = dot
         end
-        dot.Size             = UDim2.new(dotScale, 0, dotScale, 0)
+        dot.Size             = UDim2.new(0, dotPixels, 0, dotPixels)
         dot.Position         = UDim2.new(cell.sx, 0, cell.sy, 0)
         dot.BackgroundColor3 = cell.color
         dot.Visible          = true
@@ -1696,6 +1709,19 @@ function RaycastingVision.SetNoclipVisualizeShape(enabled)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
+
+function RaycastingVision.SetNoclipInfiniteZoom(enabled)
+    Config.NoclipInfiniteZoom = enabled
+
+    if State.noclipMapGui and State.noclipMapGui.setZoom then
+        local currentZoom = State.noclipMapGui.getZoom and State.noclipMapGui.getZoom() or 1
+        State.noclipMapGui.setZoom(currentZoom)
+    end
+
+    State.noclipLastMapUpdate = 0
+    Log("Noclip infinite zoom: " .. (enabled and "ON" or "OFF"), "INFO")
+    return true
+end
 
 function RaycastingVision.StartNoclipMapping()
     if not Config.NoclipEnabled then return false end
