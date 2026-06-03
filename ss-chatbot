@@ -846,15 +846,45 @@ end
 
 local function TrollApiFailure()
    local modelLabel = GetTrollModelLabel()
-   PushTrollDiagnostic("OpenRouter Diagnostic", "ERROR: API TIMEOUT 404 | model=" .. modelLabel .. " | upstream response timeout")
+   PushTrollDiagnostic("OpenRouter Diagnostic", "OPENROUTER ERROR: request timed out | model=" .. modelLabel .. " | route=chat/completions | status=504 gateway_timeout")
+end
+
+local function TrollApiPass()
+   local modelLabel = GetTrollModelLabel()
+   PushTrollDiagnostic("OpenRouter Diagnostic", "OPENROUTER OK: provider route stable | model=" .. modelLabel .. " | latency=742ms | status=200")
 end
 
 local function TrollRaycastFailure()
-   PushTrollDiagnostic("Raycast Diagnostic", "FAILED TO RAYCAST | workspace:Raycast returned nil after 3 attempts")
+   PushTrollDiagnostic("Raycast Diagnostic", "RAYCAST ERROR: failed to resolve scan | workspace:Raycast returned nil | retries=3 | budget=exhausted")
+end
+
+local function TrollRaycastPass()
+   PushTrollDiagnostic("Raycast Diagnostic", "RAYCAST OK: scan resolved | rays=32 | hits=11 | clear_paths=21 | budget=normal")
 end
 
 local function TrollPathfindingFailure()
-   PushTrollDiagnostic("Pathfinding Diagnostic", "FAILED TO PATHFIND | PathfindingService returned NoPath")
+   PushTrollDiagnostic("Pathfinding Diagnostic", "PATHFIND ERROR: route solve failed | PathfindingService=NoPath | waypoints=0 | navmesh=blocked")
+end
+
+local function TrollPathfindingPass()
+   PushTrollDiagnostic("Pathfinding Diagnostic", "PATHFIND OK: route solved | waypoints=18 | jump_links=2 | status=Success")
+end
+
+local function RunTrollCheck(name, shouldFail, passFn, failFn)
+   TrollDiagnosticsStatus:Set("Diagnostic status: " .. name .. " check queued...")
+   warn("[SS Diagnostics] " .. name .. " check queued")
+   task.wait(0.25)
+   TrollDiagnosticsStatus:Set("Diagnostic status: " .. name .. " probing runtime...")
+   warn("[SS Diagnostics] " .. name .. " probing runtime")
+   task.wait(0.35)
+
+   if shouldFail then
+      failFn()
+      return false
+   end
+
+   passFn()
+   return true
 end
 
 TrollTab:CreateToggle({
@@ -886,49 +916,75 @@ TrollTab:CreateToggle({
 
 TrollTab:CreateButton({
    Name = "API Diagnostic",
-   Callback = TrollApiFailure
+   Callback = function()
+      if TrollDiagnosticFailures.api then
+         TrollApiFailure()
+      else
+         TrollApiPass()
+      end
+   end
 })
 
 TrollTab:CreateButton({
    Name = "Raycast Diagnostic",
-   Callback = TrollRaycastFailure
+   Callback = function()
+      if TrollDiagnosticFailures.raycast then
+         TrollRaycastFailure()
+      else
+         TrollRaycastPass()
+      end
+   end
 })
 
 TrollTab:CreateButton({
    Name = "Pathfinding Diagnostic",
-   Callback = TrollPathfindingFailure
+   Callback = function()
+      if TrollDiagnosticFailures.pathfinding then
+         TrollPathfindingFailure()
+      else
+         TrollPathfindingPass()
+      end
+   end
 })
 
 TrollTab:CreateButton({
    Name = "Run Diagnostic Test",
    Callback = function()
       task.spawn(function()
-         TrollDiagnosticsStatus:Set("Diagnostic status: starting checks...")
-         warn("[SS Diagnostics] Starting full module diagnostic test")
-         task.wait(0.35)
+         PushTrollDiagnostic("Diagnostic Test", "DIAGNOSTIC START: initializing subsystem checks | session=" .. tostring(math.random(100000, 999999)))
+         task.wait(0.4)
 
-         if TrollDiagnosticFailures.api then
-            TrollApiFailure()
-         else
-            TrollDiagnosticsStatus:Set("OpenRouter check passed | model=" .. GetTrollModelLabel())
-            print("[SS Diagnostics] OpenRouter check passed")
-         end
-         task.wait(0.35)
+         local passed = 0
+         local failed = 0
 
-         if TrollDiagnosticFailures.raycast then
-            TrollRaycastFailure()
+         if RunTrollCheck("OpenRouter", TrollDiagnosticFailures.api, TrollApiPass, TrollApiFailure) then
+            passed = passed + 1
          else
-            TrollDiagnosticsStatus:Set("Raycast check passed | rays resolved")
-            print("[SS Diagnostics] Raycast check passed")
+            failed = failed + 1
          end
-         task.wait(0.35)
+         task.wait(0.3)
 
-         if TrollDiagnosticFailures.pathfinding then
-            TrollPathfindingFailure()
+         if RunTrollCheck("Raycast", TrollDiagnosticFailures.raycast, TrollRaycastPass, TrollRaycastFailure) then
+            passed = passed + 1
          else
-            TrollDiagnosticsStatus:Set("Pathfinding check passed | route computed")
-            print("[SS Diagnostics] Pathfinding check passed")
+            failed = failed + 1
          end
+         task.wait(0.3)
+
+         if RunTrollCheck("Pathfinding", TrollDiagnosticFailures.pathfinding, TrollPathfindingPass, TrollPathfindingFailure) then
+            passed = passed + 1
+         else
+            failed = failed + 1
+         end
+         task.wait(0.25)
+
+         local summary = "DIAGNOSTIC COMPLETE: passed=" .. passed .. " failed=" .. failed .. " | model=" .. GetTrollModelLabel()
+         if failed > 0 then
+            summary = summary .. " | action=manual review required"
+         else
+            summary = summary .. " | action=no faults detected"
+         end
+         PushTrollDiagnostic("Diagnostic Summary", summary)
       end)
    end
 })
