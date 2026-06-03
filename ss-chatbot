@@ -159,6 +159,26 @@ source = source:gsub(
 )
 
 source = source:gsub(
+	'MaxChatLength = 200,  %-%- Roblox chat character limit',
+	'MaxChatLength = 200,  -- Roblox chat character limit\n   ResponseDelay = 2,     -- Seconds to wait for split-up chat messages',
+	1
+)
+
+source = source:gsub(
+	'local AutoGreet = {%s*\n%s*lastActivity = tick%(%),%s*%-%- Last time bot received a message%s*\n%s*greetedPlayers = {}%s*%-%- %[username%] = timestamp %(prevent re%-greeting%)%s*\n}',
+	function()
+		return [[local AutoGreet = {
+   lastActivity = tick(),      -- Last time bot received a message
+   greetedPlayers = {}        -- [username] = timestamp (prevent re-greeting)
+}
+
+-- Split-message buffer. Roblox players often send one thought across multiple chats.
+local ChatMessageBuffers = {}]]
+	end,
+	1
+)
+
+source = source:gsub(
 	'%-%- Model%-Specific API Keys%s*local ModelApiKeys = {%s*.-%s*}',
 	function()
 		return [[-- Model-Specific API Keys
@@ -568,6 +588,112 @@ source = source:gsub(
             if not isPathfindingCmd and Config.ActionsEnabled and LoadedModules.Actions then
                directActionSequence = DetectSmartActions(messageData.Text)
             end]]
+	end,
+	1
+)
+
+source = source:gsub(
+	'if not accessAllowed then%s*\n%s*print%(string%.format%("Access control blocked %%s: %%s", sender%.Name, accessReason%)%)%s*\n%s*return%s*\n%s*end%s*\n%s*%-%- AGE GROUP CHECK',
+	function()
+		return [==[if not accessAllowed then
+               print(string.format("Access control blocked %s: %s", sender.Name, accessReason))
+               return
+            end
+
+            local username = sender.Name
+            local text = tostring(messageData.Text or "")
+
+            Memory:AddUserMessage(username, text, false)
+
+            local buffer = ChatMessageBuffers[username]
+            if not buffer then
+               buffer = {
+                  sender = sender,
+                  messages = {},
+                  token = 0
+               }
+               ChatMessageBuffers[username] = buffer
+            end
+
+            buffer.sender = sender
+            table.insert(buffer.messages, text)
+            buffer.token = buffer.token + 1
+
+            local token = buffer.token
+            local delaySeconds = math.clamp(tonumber(Config.ResponseDelay) or 2, 0, 5)
+            wait(delaySeconds)
+
+            if ChatMessageBuffers[username] ~= buffer or buffer.token ~= token then
+               return
+            end
+
+            ChatMessageBuffers[username] = nil
+
+            local parts = {}
+            for _, line in ipairs(buffer.messages) do
+               table.insert(parts, line)
+            end
+            local bufferedMessage = table.concat(parts, " ")
+
+            if bufferedMessage == "" then
+               return
+            end
+
+            -- AGE GROUP CHECK]==]
+	end,
+	1
+)
+
+source = source:gsub(
+	'Memory:AddUserMessage%(sender%.Name, messageData%.Text, false%)',
+	'-- User fragments are stored before the split-message wait.',
+	1
+)
+
+source = source:gsub(
+	'ExecutePathfindingCommand%(messageData%.Text, sender%.Name%)',
+	'ExecutePathfindingCommand(bufferedMessage, sender.Name)',
+	1
+)
+
+source = source:gsub(
+	'DetectSmartActions%(messageData%.Text%)',
+	'DetectSmartActions(bufferedMessage)',
+	1
+)
+
+source = source:gsub(
+	'GetAIResponse%(messageData%.Text, sender%.Name, displayName%)',
+	'GetAIResponse(bufferedMessage, sender.Name, displayName)',
+	1
+)
+
+source = source:gsub(
+	'local MessageFormattingSection = ChatTab:CreateSection%("Message Formatting"%)',
+	function()
+		return [[local ResponseDelayParagraph = ChatTab:CreateParagraph({
+   Title = "Split Message Wait",
+   Content = "Waits briefly for players who type one thought across multiple Roblox chat messages before the AI responds."
+})
+
+local ResponseDelaySlider = ChatTab:CreateSlider({
+   Name = "Wait For User (seconds)",
+   Range = {0, 5},
+   Increment = 0.5,
+   CurrentValue = 2,
+   Flag = "ResponseDelay",
+   Callback = function(value)
+      Config.ResponseDelay = value
+      Rayfield:Notify({
+         Title = "Response Delay Updated",
+         Content = "Waiting " .. value .. "s for split messages",
+         Duration = 2,
+         Image = 4483362458
+      })
+   end
+})
+
+local MessageFormattingSection = ChatTab:CreateSection("Message Formatting")]]
 	end,
 	1
 )
