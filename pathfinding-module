@@ -180,6 +180,26 @@ local function GetPosition(obj)
     return nil
 end
 
+local function ProjectToWalkableGround(position)
+    if typeof(position) ~= "Vector3" then
+        return position
+    end
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local character = GetCharacter()
+    params.FilterDescendantsInstances = character and {character} or {}
+    params.IgnoreWater = false
+
+    local origin = position + Vector3.new(0, 18, 0)
+    local result = workspace:Raycast(origin, Vector3.new(0, -80, 0), params)
+    if result and result.Position and result.Normal and result.Normal.Y > 0.35 then
+        return result.Position + Vector3.new(0, 2.5, 0)
+    end
+
+    return position
+end
+
 -- ===================================
 -- RAYCASTING INTEGRATION
 -- ===================================
@@ -1006,6 +1026,9 @@ local function ComputePath(startPos, endPos, useDeathAvoidance)
     if useDeathAvoidance == nil then
         useDeathAvoidance = true
     end
+
+    startPos = ProjectToWalkableGround(startPos)
+    endPos = ProjectToWalkableGround(endPos)
 
     if useDeathAvoidance and IsInDeathZone(endPos) then
         Log("Target is in death zone", "ERROR")

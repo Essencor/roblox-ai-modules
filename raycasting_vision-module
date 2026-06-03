@@ -44,12 +44,20 @@ local Config = {
     DomeStepTimeBudget = 0.006,    -- Max seconds spent in one dome step
     NoclipStepTimeBudget = 0.005,  -- Max seconds spent in one noclip step
     NavigationBoostEnabled = true,
-    NavigationDomeRaysPerStep = 20,
-    NavigationDomeStepWait = 0.015,
-    NavigationDomeStepTimeBudget = 0.022,
-    NavigationNoclipRaysPerStep = 9,
-    NavigationNoclipStepWait = 0.025,
-    NavigationNoclipStepTimeBudget = 0.018,
+    NavigationDomeRaysPerStep = 14,
+    NavigationDomeStepWait = 0.025,
+    NavigationDomeStepTimeBudget = 0.014,
+    NavigationNoclipRaysPerStep = 5,
+    NavigationNoclipStepWait = 0.045,
+    NavigationNoclipStepTimeBudget = 0.010,
+    TerrainFriendlyMode = true,
+    TerrainGroundNormalY = 0.55,    -- Terrain hits above this are treated as floor/slope, not walls
+    TerrainBoostDomeRaysPerStep = 5,
+    TerrainBoostDomeStepWait = 0.06,
+    TerrainBoostDomeStepTimeBudget = 0.006,
+    TerrainBoostNoclipRaysPerStep = 2,
+    TerrainBoostNoclipStepWait = 0.09,
+    TerrainBoostNoclipStepTimeBudget = 0.004,
 
     -- Background dome mapping
     DomeMappingEnabled = true,
@@ -152,6 +160,7 @@ local State = {
     noclipMapGui = nil,
     noclipPixelPool = {},
     noclipLastMapUpdate = 0,
+    terrainModeUntil = 0,
     -- Unified map (combines dome + reflection + noclip data)
     unifiedMap = {},
     unifiedMapOrder = {},
@@ -180,7 +189,9 @@ local Stats = {
     movementAnalyses = 0,
     noclipRays = 0,
     noclipHits = 0,
-    noclipScans = 0
+    noclipScans = 0,
+    terrainHits = 0,
+    terrainGroundSkipped = 0
 }
 
 -- ===================================
@@ -196,8 +207,34 @@ local function IsNavigationBoostActive()
     return Config.NavigationBoostEnabled and State.navigationBoostActive
 end
 
+local function IsTerrainInstance(instance)
+    return instance ~= nil and instance.ClassName == "Terrain"
+end
+
+local function IsTerrainGroundHit(result)
+    return Config.TerrainFriendlyMode
+        and result ~= nil
+        and IsTerrainInstance(result.Instance)
+        and result.Normal
+        and result.Normal.Y >= Config.TerrainGroundNormalY
+end
+
+local function NoteTerrainHit(result)
+    if result and IsTerrainInstance(result.Instance) then
+        Stats.terrainHits = Stats.terrainHits + 1
+        State.terrainModeUntil = tick() + 4
+    end
+end
+
+local function IsTerrainModeActive()
+    return Config.TerrainFriendlyMode and tick() < (State.terrainModeUntil or 0)
+end
+
 local function GetDomeStepSettings()
     if IsNavigationBoostActive() then
+        if IsTerrainModeActive() then
+            return Config.TerrainBoostDomeRaysPerStep, Config.TerrainBoostDomeStepWait, Config.TerrainBoostDomeStepTimeBudget
+        end
         return Config.NavigationDomeRaysPerStep, Config.NavigationDomeStepWait, Config.NavigationDomeStepTimeBudget
     end
     return Config.DomeRaysPerStep, Config.DomeStepWait, Config.DomeStepTimeBudget
@@ -205,6 +242,9 @@ end
 
 local function GetNoclipStepSettings()
     if IsNavigationBoostActive() then
+        if IsTerrainModeActive() then
+            return Config.TerrainBoostNoclipRaysPerStep, Config.TerrainBoostNoclipStepWait, Config.TerrainBoostNoclipStepTimeBudget
+        end
         return Config.NavigationNoclipRaysPerStep, Config.NavigationNoclipStepWait, Config.NavigationNoclipStepTimeBudget
     end
     return Config.NoclipRaysPerStep, Config.NoclipStepWait, Config.NoclipStepTimeBudget
@@ -327,6 +367,7 @@ local function PerformRaycast(origin, direction, distance, useCache)
         local cached = State.raycastCache[cacheKey]
         if cached and (tick() - cached.time) < Config.CacheTimeout then
             Stats.cachedHits = Stats.cachedHits + 1
+            NoteTerrainHit(cached.result)
             return cached.result
         end
     end
@@ -343,6 +384,7 @@ local function PerformRaycast(origin, direction, distance, useCache)
     -- decorative geometry is not mistaken for a real wall.
     local result = workspace:Raycast(origin, direction * distance, raycastParams)
     Stats.totalRaycasts = Stats.totalRaycasts + 1
+    NoteTerrainHit(result)
 
     local maxPierces = 8
     local pierces = 0
@@ -358,6 +400,7 @@ local function PerformRaycast(origin, direction, distance, useCache)
         raycastParams.FilterDescendantsInstances = excludeList
         result = workspace:Raycast(origin, direction * distance, raycastParams)
         Stats.totalRaycasts = Stats.totalRaycasts + 1
+        NoteTerrainHit(result)
         pierces = pierces + 1
     end
 
@@ -828,6 +871,10 @@ end
 
 local function StoreDomeHit(origin, direction, result, kind, bounceIndex, sourceKey)
     if not result then return nil end
+    if IsTerrainGroundHit(result) then
+        Stats.terrainGroundSkipped = Stats.terrainGroundSkipped + 1
+        return nil
+    end
 
     local key = GetMapCellKey(result.Position)
     local now = tick()
@@ -935,6 +982,10 @@ local function TraceDomeRay(origin, direction, shouldReflect)
         return castsUsed
     end
 
+    if IsTerrainGroundHit(result) then
+        return castsUsed
+    end
+
     -- Only reflect off walls (vertical normals) not floors/ceilings.
     -- Floor/ceiling hits have a high Y component on their normal; reflecting
     -- off them just sends the ray bouncing vertically and it never travels
@@ -964,6 +1015,10 @@ local function TraceDomeRay(origin, direction, shouldReflect)
         if not bounceResult then
             -- Ray traveled full ReflectionDistance without hitting anything
             -- (open corridor end) — nothing more to bounce off, stop here.
+            break
+        end
+
+        if IsTerrainGroundHit(bounceResult) then
             break
         end
 
@@ -1249,6 +1304,7 @@ local function CastNoclipRay(origin, direction, deadline)
         local remaining = Config.NoclipMaxDistance - totalTraveled
         local result = workspace:Raycast(currentOrigin, direction * remaining, params)
         if not result then break end
+        NoteTerrainHit(result)
 
         local segDist = (result.Position - currentOrigin).Magnitude
         totalTraveled = totalTraveled + segDist
@@ -1262,11 +1318,13 @@ local function CastNoclipRay(origin, direction, deadline)
             StoreFreeCell(samplePos)
         end
 
-        -- Store ALL hits (floors, below-torso, everything).
-        -- Filtering happens at render time: the 2D minimap hides floor/
-        -- below-torso hits, but the 3D visualizer shows the full data.
-        StoreNoclipCell(result.Position, result.Normal, result.Instance, result.Material)
-        Stats.noclipHits = Stats.noclipHits + 1
+        local terrainGroundHit = IsTerrainGroundHit(result)
+        if terrainGroundHit then
+            Stats.terrainGroundSkipped = Stats.terrainGroundSkipped + 1
+        else
+            StoreNoclipCell(result.Position, result.Normal, result.Instance, result.Material)
+            Stats.noclipHits = Stats.noclipHits + 1
+        end
 
         -- Purple noclip ray visualisation — use shared pool, throttled
         if Config.ShowRays then
@@ -1284,6 +1342,10 @@ local function CastNoclipRay(origin, direction, deadline)
                     end)
                 end
             end
+        end
+
+        if IsTerrainInstance(result.Instance) then
+            break
         end
 
         -- Add hit part to exclude list so next cast passes through it
@@ -2017,7 +2079,9 @@ function RaycastingVision.ScanForward(distance, rayCount)
     local centerRay = PerformRaycast(origin, lookDirection, distance)
     VisualizeRay(origin, lookDirection, distance, centerRay, Color3.new(0, 1, 1))
     
-    if centerRay then
+    if centerRay and IsTerrainGroundHit(centerRay) then
+        table.insert(results.clearDirections, "forward")
+    elseif centerRay then
         results.hasObstacle = true
         results.minDistance = math.min(results.minDistance, (centerRay.Position - origin).Magnitude)
         table.insert(results.obstacles, {
@@ -2041,7 +2105,9 @@ function RaycastingVision.ScanForward(distance, rayCount)
         local leftRay = PerformRaycast(origin, leftDir, distance)
         VisualizeRay(origin, leftDir, distance, leftRay, Color3.new(0, 1, 0.5))
         
-        if leftRay then
+        if leftRay and IsTerrainGroundHit(leftRay) then
+            table.insert(results.clearDirections, "left")
+        elseif leftRay then
             results.hasObstacle = true
             results.minDistance = math.min(results.minDistance, (leftRay.Position - origin).Magnitude)
             table.insert(results.obstacles, {
@@ -2060,7 +2126,9 @@ function RaycastingVision.ScanForward(distance, rayCount)
         local rightRay = PerformRaycast(origin, rightDir, distance)
         VisualizeRay(origin, rightDir, distance, rightRay, Color3.new(0.5, 1, 0))
         
-        if rightRay then
+        if rightRay and IsTerrainGroundHit(rightRay) then
+            table.insert(results.clearDirections, "right")
+        elseif rightRay then
             results.hasObstacle = true
             results.minDistance = math.min(results.minDistance, (rightRay.Position - origin).Magnitude)
             table.insert(results.obstacles, {
@@ -2106,7 +2174,10 @@ function RaycastingVision.ScanCircular(radius, rayCount)
         local rayResult = PerformRaycast(origin, direction, radius)
         VisualizeRay(origin, direction, radius, rayResult, Color3.new(1, 1, 0))
         
-        if rayResult then
+        if rayResult and IsTerrainGroundHit(rayResult) then
+            table.insert(results.clearDirections, math.deg(angle))
+            results.obstacleMap[math.floor(math.deg(angle))] = false
+        elseif rayResult then
             table.insert(results.obstacles, {
                 position = rayResult.Position,
                 normal = rayResult.Normal,
@@ -2306,6 +2377,14 @@ function RaycastingVision.CheckLineOfSight(targetPos)
         return true, {
             distance = distance,
             clear = true
+        }
+    end
+
+    if IsTerrainGroundHit(result) then
+        return true, {
+            distance = distance,
+            clear = true,
+            terrainGround = true
         }
     end
     
@@ -2615,7 +2694,10 @@ function RaycastingVision.GetStatistics()
         reflectionEdges = #State.reflectionEdges,
         laddersDetected = Stats.laddersDetected,
         hazardsClassified = Stats.hazardsClassified,
-        movementAnalyses = Stats.movementAnalyses
+        movementAnalyses = Stats.movementAnalyses,
+        terrainHits = Stats.terrainHits,
+        terrainGroundSkipped = Stats.terrainGroundSkipped,
+        terrainModeActive = IsTerrainModeActive()
     }
 end
 
