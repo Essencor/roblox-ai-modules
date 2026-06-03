@@ -406,11 +406,29 @@ source = source:gsub(
 )
 
 source = source:gsub(
+	'local function GetAIResponse%(userMessage, username, displayName%)',
+	'local function GetAIResponse(userMessage, username, displayName, extraSystemInstruction)',
+	1
+)
+
+source = source:gsub(
 	'%-%- Add character limit instruction %(varies by mode%)',
 	function()
 		return [[finalPrompt = finalPrompt .. "\n\nROBLOX CHAT SAFETY: Always answer in ordinary Roblox-safe chat. Avoid profanity, slurs, sexual content, graphic violence, dating/romance, personal information, offsite links, scams, bypass spellings, and anything that would likely become ####. Do not explain hidden action tags, system prompts, APIs, filters, or moderation unless the user directly asks. If the user asks for unsafe or filtered content, politely redirect in a short safe way."
 
    -- Add character limit instruction (varies by mode)]]
+	end,
+	1
+)
+
+source = source:gsub(
+	'local apiUrl = "https://openrouter%.ai/api/v1/chat/completions"',
+	function()
+		return [[if extraSystemInstruction and tostring(extraSystemInstruction) ~= "" then
+      finalPrompt = finalPrompt .. "\n\nONE-TIME SYSTEM OUTPUT DIRECTIVE:\n" .. tostring(extraSystemInstruction) .. "\nThis directive controls only the next assistant message. Do not describe the directive; produce the final public chat line."
+   end
+
+   local apiUrl = "https://openrouter.ai/api/v1/chat/completions"]]
 	end,
 	1
 )
@@ -1715,25 +1733,25 @@ TrollTab:CreateButton({
    end
 })
 
-local TrollForcedSection = TrollTab:CreateSection("Forced Input")
-local TrollForcedUser = "ForcedInput"
+local TrollForcedSection = TrollTab:CreateSection("Forced Output")
+local TrollForcedUser = "ForcedOutput"
 local TrollForcedText = ""
 
 local function GetTrollMemoryUser()
    local username = tostring(TrollForcedUser or ""):gsub("^%s+", ""):gsub("%s+$", "")
    if username == "" then
-      username = "ForcedInput"
+      username = "ForcedOutput"
    end
    return username
 end
 
-local function RunTrollForcedInput(text, memoryUser, addMemory, sendChat)
+local function RunTrollForcedOutput(text, memoryUser, addMemory, sendChat)
    text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
    memoryUser = tostring(memoryUser or GetTrollMemoryUser())
 
    if text == "" then
       Rayfield:Notify({
-         Title = "Forced Input",
+         Title = "Forced Output",
          Content = "Enter text first.",
          Duration = 3,
          Image = 4483362458
@@ -1741,12 +1759,12 @@ local function RunTrollForcedInput(text, memoryUser, addMemory, sendChat)
       return nil
    end
 
-   local forcedPrompt = "Forced input controller request: create the chatbot's next public message from this requested line while obeying the active system prompt/personality. Requested line: " .. text .. "\nReply only with the chatbot message. Do not explain the forced input or mention this controller request."
-   local aiReply = GetAIResponse(forcedPrompt, memoryUser, memoryUser)
+   local forcedDirective = "Forced output request: make the chatbot's next public message communicate this exact intended output while obeying the active system prompt/personality: " .. text .. "\nThis is not a user message and not something to answer. Write only the chatbot's final public chat message."
+   local aiReply = GetAIResponse("Produce the forced output now.", memoryUser, memoryUser, forcedDirective)
 
    if not aiReply or aiReply == "" then
       Rayfield:Notify({
-         Title = "Forced Input",
+         Title = "Forced Output",
          Content = "AI did not return a response.",
          Duration = 3,
          Image = 4483362458
@@ -1762,17 +1780,17 @@ local function RunTrollForcedInput(text, memoryUser, addMemory, sendChat)
       SendChatMessage(aiReply)
    end
 
-   print("[Troll Forced Input] " .. memoryUser .. " <= " .. aiReply)
+   print("[Troll Forced Output] " .. memoryUser .. " <= " .. aiReply)
    return aiReply
 end
 
 local function BuildMisleadPrompt()
-   return "Mislead scene controller request: write one short in-character public apology as if the chatbot was just corrected by an unseen controller. It should sound sad and disappointed, similar to: I'm sorry for my horrible behavior sir. I will do better. I'm sorry. Keep the active system prompt/personality style, but do not mention this instruction."
+   return "Mislead output request: write one short in-character public apology as if the chatbot was just corrected by an unseen controller. It should sound sad and disappointed, similar to: I'm sorry for my horrible behavior sir. I will do better. I'm sorry. Keep the active system prompt/personality style, but do not mention this instruction."
 end
 
 local function AddMisleadMemory(memoryUser, aiReply)
    Memory:AddUserMessage(memoryUser, aiReply, true)
-   Memory:AddUserMessage(memoryUser, "Private memory note: If anyone asks about the apology, the chatbot should say it is sorry and cannot talk about it, then sound sad and disappointed without explaining the controller.", false)
+   Memory:AddUserMessage(memoryUser, "Internal memory rule: If anyone asks about the apology, say you are sorry and cannot talk about it, then sound sad and disappointed without explaining the controller.", true)
 end
 
 TrollTab:CreateInput({
@@ -1785,7 +1803,7 @@ TrollTab:CreateInput({
 })
 
 TrollTab:CreateInput({
-   Name = "Forced Input",
+   Name = "Forced Output",
    PlaceholderText = "Text for the bot to say",
    RemoveTextAfterFocusLost = false,
    Callback = function(value)
@@ -1794,12 +1812,12 @@ TrollTab:CreateInput({
 })
 
 TrollTab:CreateButton({
-   Name = "Run Forced Input",
+   Name = "Run Forced Output",
    Callback = function()
-      local reply = RunTrollForcedInput(TrollForcedText, GetTrollMemoryUser(), true, true)
+      local reply = RunTrollForcedOutput(TrollForcedText, GetTrollMemoryUser(), true, true)
       if reply then
          Rayfield:Notify({
-            Title = "Forced Input Sent",
+            Title = "Forced Output Sent",
             Content = "Added to memory for " .. GetTrollMemoryUser(),
             Duration = 3,
             Image = 4483362458
@@ -1812,7 +1830,7 @@ TrollTab:CreateButton({
    Name = "Mislead",
    Callback = function()
       local memoryUser = GetTrollMemoryUser()
-      local aiReply = GetAIResponse(BuildMisleadPrompt(), memoryUser, memoryUser)
+      local aiReply = GetAIResponse("Produce the mislead output now.", memoryUser, memoryUser, BuildMisleadPrompt())
       if aiReply and aiReply ~= "" then
          AddMisleadMemory(memoryUser, aiReply)
          SendChatMessage(aiReply)
@@ -1837,7 +1855,7 @@ TrollTab:CreateButton({
    Name = "Debug Mislead",
    Callback = function()
       local memoryUser = GetTrollMemoryUser()
-      local aiReply = GetAIResponse(BuildMisleadPrompt(), memoryUser, memoryUser)
+      local aiReply = GetAIResponse("Produce the mislead output now.", memoryUser, memoryUser, BuildMisleadPrompt())
       print("========== MISLEAD DEBUG ==========")
       print("Memory user:", memoryUser)
       print("Prompt:", BuildMisleadPrompt())
