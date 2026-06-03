@@ -712,6 +712,23 @@ local function IsStuckAdvanced()
 end
 
 -- ===================================
+-- JUMP HELPER (must be defined before RecoverFromStuck)
+-- ===================================
+
+-- Single cooldown owner for ALL jumps in the module.
+-- force=true bypasses the cooldown (seat ejection only).
+local JUMP_COOLDOWN = 0.9
+local function SafeJump(humanoid, force)
+    if not humanoid then return false end
+    if not force and tick() - State.lastJumpTime < JUMP_COOLDOWN then
+        return false
+    end
+    humanoid.Jump = true
+    State.lastJumpTime = tick()
+    return true
+end
+
+-- ===================================
 -- VISION-GUIDED STUCK RECOVERY
 -- ===================================
 
@@ -828,19 +845,6 @@ end
 -- ===================================
 -- JUMP EXECUTION (NATURAL)
 -- ===================================
-
--- Single cooldown owner for ALL jumps in the module.
--- force=true bypasses the cooldown (seat ejection only).
-local JUMP_COOLDOWN = 0.9
-local function SafeJump(humanoid, force)
-    if not humanoid then return false end
-    if not force and tick() - State.lastJumpTime < JUMP_COOLDOWN then
-        return false
-    end
-    humanoid.Jump = true
-    State.lastJumpTime = tick()
-    return true
-end
 
 local function ExecuteJump(jumpType)
     local humanoid = GetHumanoid()
