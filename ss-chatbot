@@ -776,7 +776,174 @@ source = source:gsub(
 source = source:gsub(
 	'SettingsTab = Window:CreateTab%("Settings", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%("Information"%)',
 	function()
-		return 'local TrollTab = Window:CreateTab("Troll", 4483362458)\nSettingsTab = Window:CreateTab("Settings", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection("Information")'
+		return [[local TrollTab = Window:CreateTab("Troll", 4483362458)
+
+local TrollDiagnosticsSection = TrollTab:CreateSection("Diagnostics")
+local TrollDiagnosticsStatus = TrollTab:CreateLabel("Diagnostic status: idle")
+
+local TrollDiagnosticFailures = {
+   api = true,
+   raycast = true,
+   pathfinding = true
+}
+
+local function GetTrollModelLabel()
+   local model = Config and Config.Model or "liquid/lfm-2-24b-a2b"
+   local lower = string.lower(tostring(model))
+   if string.find(lower, "liquid", 1, true) then
+      return "LIQUID A4B"
+   elseif string.find(lower, "llama", 1, true) then
+      return "LLAMA 3.1 8B"
+   elseif string.find(lower, "qwen", 1, true) then
+      return "QWEN 3.5 9B"
+   end
+   return string.upper(tostring(model))
+end
+
+local function PushTrollDiagnostic(title, line)
+   TrollDiagnosticsStatus:Set(line)
+   warn("[SS Diagnostics] " .. line)
+   local chatLine = "[DIAGNOSTIC] " .. tostring(line)
+   local sentToChat = false
+
+   if type(SendChatMessage) == "function" then
+      sentToChat = pcall(function()
+         SendChatMessage(chatLine)
+      end)
+   end
+
+   if not sentToChat then
+      pcall(function()
+         local textChatService = game:GetService("TextChatService")
+         local textChannels = textChatService:FindFirstChild("TextChannels")
+         local generalChannel = textChannels and (textChannels:FindFirstChild("RBXGeneral") or textChannels:FindFirstChild("General"))
+         if generalChannel then
+            generalChannel:SendAsync(chatLine)
+            sentToChat = true
+         end
+      end)
+   end
+
+   if not sentToChat then
+      pcall(function()
+         local chatEvents = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
+         local sayMessage = chatEvents and chatEvents:FindFirstChild("SayMessageRequest")
+         if sayMessage then
+            sayMessage:FireServer(chatLine, "All")
+            sentToChat = true
+         end
+      end)
+   end
+
+   Rayfield:Notify({
+      Title = title,
+      Content = line,
+      Duration = 5,
+      Image = 4483362458
+   })
+end
+
+local function TrollApiFailure()
+   local modelLabel = GetTrollModelLabel()
+   PushTrollDiagnostic("OpenRouter Diagnostic", "ERROR: API TIMEOUT 404 | model=" .. modelLabel .. " | upstream response timeout")
+end
+
+local function TrollRaycastFailure()
+   PushTrollDiagnostic("Raycast Diagnostic", "FAILED TO RAYCAST | workspace:Raycast returned nil after 3 attempts")
+end
+
+local function TrollPathfindingFailure()
+   PushTrollDiagnostic("Pathfinding Diagnostic", "FAILED TO PATHFIND | PathfindingService returned NoPath")
+end
+
+TrollTab:CreateToggle({
+   Name = "Fail API Check",
+   CurrentValue = true,
+   Flag = "TrollFailApi",
+   Callback = function(value)
+      TrollDiagnosticFailures.api = value and true or false
+   end
+})
+
+TrollTab:CreateToggle({
+   Name = "Fail Raycast Check",
+   CurrentValue = true,
+   Flag = "TrollFailRaycast",
+   Callback = function(value)
+      TrollDiagnosticFailures.raycast = value and true or false
+   end
+})
+
+TrollTab:CreateToggle({
+   Name = "Fail Pathfinding Check",
+   CurrentValue = true,
+   Flag = "TrollFailPathfinding",
+   Callback = function(value)
+      TrollDiagnosticFailures.pathfinding = value and true or false
+   end
+})
+
+TrollTab:CreateButton({
+   Name = "API Diagnostic",
+   Callback = TrollApiFailure
+})
+
+TrollTab:CreateButton({
+   Name = "Raycast Diagnostic",
+   Callback = TrollRaycastFailure
+})
+
+TrollTab:CreateButton({
+   Name = "Pathfinding Diagnostic",
+   Callback = TrollPathfindingFailure
+})
+
+TrollTab:CreateButton({
+   Name = "Run Diagnostic Test",
+   Callback = function()
+      task.spawn(function()
+         TrollDiagnosticsStatus:Set("Diagnostic status: starting checks...")
+         warn("[SS Diagnostics] Starting full module diagnostic test")
+         task.wait(0.35)
+
+         if TrollDiagnosticFailures.api then
+            TrollApiFailure()
+         else
+            TrollDiagnosticsStatus:Set("OpenRouter check passed | model=" .. GetTrollModelLabel())
+            print("[SS Diagnostics] OpenRouter check passed")
+         end
+         task.wait(0.35)
+
+         if TrollDiagnosticFailures.raycast then
+            TrollRaycastFailure()
+         else
+            TrollDiagnosticsStatus:Set("Raycast check passed | rays resolved")
+            print("[SS Diagnostics] Raycast check passed")
+         end
+         task.wait(0.35)
+
+         if TrollDiagnosticFailures.pathfinding then
+            TrollPathfindingFailure()
+         else
+            TrollDiagnosticsStatus:Set("Pathfinding check passed | route computed")
+            print("[SS Diagnostics] Pathfinding check passed")
+         end
+      end)
+   end
+})
+
+TrollTab:CreateButton({
+   Name = "Clear Diagnostic",
+   Callback = function()
+      TrollDiagnosticsStatus:Set("Diagnostic status: idle")
+      print("[SS Diagnostics] Cleared")
+   end
+})
+
+SettingsTab = Window:CreateTab("Settings", 4483362458)
+
+do
+local InfoSection = SettingsTab:CreateSection("Information")]]
 	end,
 	1
 )
