@@ -2079,13 +2079,27 @@ function RaycastingVision.ScanForward(distance, rayCount)
         minDistance = distance
     }
     
+    -- Returns true if a raycast hit should be ignored (non-collidable or floor/slope normal)
+    local function IsPassableHit(result)
+        if not result then return true end
+        -- Skip CanCollide=false parts (belt-and-suspenders on top of PerformRaycast piercing)
+        if result.Instance:IsA("BasePart") and not result.Instance.CanCollide then
+            return true
+        end
+        -- Treat any hit with a mostly-upward normal as floor/slope, not a wall
+        if result.Normal and result.Normal.Y >= Config.TerrainGroundNormalY then
+            return true
+        end
+        return false
+    end
+
     -- Center ray
     local centerRay = PerformRaycast(origin, lookDirection, distance)
     VisualizeRay(origin, lookDirection, distance, centerRay, Color3.new(0, 1, 1))
-    
-    if centerRay and IsTerrainGroundHit(centerRay) then
+
+    if not centerRay or IsPassableHit(centerRay) then
         table.insert(results.clearDirections, "forward")
-    elseif centerRay then
+    else
         results.hasObstacle = true
         results.minDistance = math.min(results.minDistance, (centerRay.Position - origin).Magnitude)
         table.insert(results.obstacles, {
@@ -2095,23 +2109,21 @@ function RaycastingVision.ScanForward(distance, rayCount)
             distance = (centerRay.Position - origin).Magnitude
         })
         VisualizeObstacle(centerRay.Position, Vector3.new(1, 1, 1))
-    else
-        table.insert(results.clearDirections, "forward")
     end
-    
+
     -- Left and right rays
     local spreadAngle = 30
     for i = 1, math.floor(rayCount / 2) do
         local angle = math.rad(spreadAngle * i / math.floor(rayCount / 2))
-        
+
         -- Left ray
         local leftDir = (lookDirection * math.cos(angle) - rightDirection * math.sin(angle)).Unit
         local leftRay = PerformRaycast(origin, leftDir, distance)
         VisualizeRay(origin, leftDir, distance, leftRay, Color3.new(0, 1, 0.5))
-        
-        if leftRay and IsTerrainGroundHit(leftRay) then
+
+        if not leftRay or IsPassableHit(leftRay) then
             table.insert(results.clearDirections, "left")
-        elseif leftRay then
+        else
             results.hasObstacle = true
             results.minDistance = math.min(results.minDistance, (leftRay.Position - origin).Magnitude)
             table.insert(results.obstacles, {
@@ -2121,18 +2133,16 @@ function RaycastingVision.ScanForward(distance, rayCount)
                 distance = (leftRay.Position - origin).Magnitude,
                 direction = "left"
             })
-        else
-            table.insert(results.clearDirections, "left")
         end
-        
+
         -- Right ray
         local rightDir = (lookDirection * math.cos(angle) + rightDirection * math.sin(angle)).Unit
         local rightRay = PerformRaycast(origin, rightDir, distance)
         VisualizeRay(origin, rightDir, distance, rightRay, Color3.new(0.5, 1, 0))
-        
-        if rightRay and IsTerrainGroundHit(rightRay) then
+
+        if not rightRay or IsPassableHit(rightRay) then
             table.insert(results.clearDirections, "right")
-        elseif rightRay then
+        else
             results.hasObstacle = true
             results.minDistance = math.min(results.minDistance, (rightRay.Position - origin).Magnitude)
             table.insert(results.obstacles, {
@@ -2142,11 +2152,9 @@ function RaycastingVision.ScanForward(distance, rayCount)
                 distance = (rightRay.Position - origin).Magnitude,
                 direction = "right"
             })
-        else
-            table.insert(results.clearDirections, "right")
         end
     end
-    
+
     Stats.obstaclesDetected = Stats.obstaclesDetected + #results.obstacles
     
     return results
