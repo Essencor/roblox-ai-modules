@@ -193,6 +193,79 @@ source = source:gsub(
 )
 
 source = source:gsub(
+	'%-%- Add memory context if user is specified%s*\n%s*if username then%s*\n%s*local userHistory = Memory:GetUserHistory%(username, 5%)%s*\n%s*%s*\n%s*if userHistory ~= "" then%s*\n%s*%-%- Use display name in prompt if available%s*\n%s*local contextName = displayName or username%s*\n%s*finalPrompt = finalPrompt %.%. "\\n\\nConversation history with " %.%. contextName %.%. ":\\n" %.%. userHistory%s*\n%s*end%s*\n%s*%s*\n%s*%-%- Add note about display name if different from username%s*\n%s*if displayName and displayName ~= username then%s*\n%s*finalPrompt = finalPrompt %.%. string%.format%("\\n\\nNote: This user\'s display name is \'%%s\' but their username is \'@%%s\'. Use their display name when addressing them%.", displayName, username%)%s*\n%s*end%s*\n%s*end',
+	function()
+		return [[-- Add memory context if user is specified
+   if username then
+      local userHistory = Memory:GetUserHistory(username, 6)
+
+      if userHistory ~= "" then
+         local contextName = displayName or username
+         finalPrompt = finalPrompt .. "\n\nConversation history with " .. contextName .. ":\n" .. userHistory
+      end
+
+      local function sharedMemoryMatches(message, query)
+         local msg = tostring(message or ""):lower()
+         local q = tostring(query or ""):lower()
+         for word in q:gmatch("%w+") do
+            if #word >= 3 and msg:find(word, 1, true) then
+               return true
+            end
+         end
+         return false
+      end
+
+      local sharedRelevant = {}
+      local sharedRecent = {}
+      for i = #Memory.GlobalMemory, 1, -1 do
+         local entry = Memory.GlobalMemory[i]
+         if entry and entry.username ~= username then
+            local speaker = entry.isAI and ("AI to " .. tostring(entry.username)) or tostring(entry.username)
+            local line = speaker .. ": " .. tostring(entry.message):sub(1, 120)
+
+            if #sharedRecent < 4 then
+               table.insert(sharedRecent, line)
+            end
+
+            if #sharedRelevant < 5 and sharedMemoryMatches(entry.message, userMessage) then
+               table.insert(sharedRelevant, line)
+            end
+
+            if #sharedRecent >= 4 and #sharedRelevant >= 5 then
+               break
+            end
+         end
+      end
+
+      if #sharedRelevant > 0 or #sharedRecent > 0 then
+         finalPrompt = finalPrompt .. "\n\nShared memory from other players:\n"
+
+         if #sharedRelevant > 0 then
+            finalPrompt = finalPrompt .. "Relevant:\n"
+            for _, line in ipairs(sharedRelevant) do
+               finalPrompt = finalPrompt .. "- " .. line .. "\n"
+            end
+         end
+
+         if #sharedRecent > 0 then
+            finalPrompt = finalPrompt .. "Recent:\n"
+            for _, line in ipairs(sharedRecent) do
+               finalPrompt = finalPrompt .. "- " .. line .. "\n"
+            end
+         end
+
+         finalPrompt = finalPrompt .. "Use shared memory when it helps answer the current user, but do not pretend the current user said something another player said."
+      end
+
+      if displayName and displayName ~= username then
+         finalPrompt = finalPrompt .. string.format("\n\nNote: This user's display name is '%s' but their username is '@%s'. Use their display name when addressing them.", displayName, username)
+      end
+   end]]
+	end,
+	1
+)
+
+source = source:gsub(
 	'local function LoadModule%(moduleName%)%s*[%s%S]-local function GetModule',
 	function()
 		return [[local function LoadModule(moduleName)
