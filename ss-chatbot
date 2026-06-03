@@ -330,7 +330,16 @@ local function FindNearestPlayer()]]
 
 source = source:gsub(
 	'if sender and sender ~= LocalPlayer then%s*\n%s*%-%- AGE GROUP CHECK %(13%+ vs <13%)',
-	'if sender and sender ~= LocalPlayer then\n            local accessAllowed, accessReason = CanPlayerUseChatbot(sender)\n            if not accessAllowed then\n               print(string.format("Access control blocked %s: %s", sender.Name, accessReason))\n               return\n            end\n\n            -- AGE GROUP CHECK (13+ vs <13)',
+	function()
+		return [[if sender and sender ~= LocalPlayer then
+            local accessAllowed, accessReason = CanPlayerUseChatbot(sender)
+            if not accessAllowed then
+               print(string.format("Access control blocked %s: %s", sender.Name, accessReason))
+               return
+            end
+
+            -- AGE GROUP CHECK (13+ vs <13)]]
+	end,
 	1
 )
 
