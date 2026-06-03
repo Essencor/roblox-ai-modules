@@ -5,6 +5,27 @@ print("[SS Chatbot] loader v40 started")
 
 local SOURCE_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/98bdb57616fe9e5278046129d034638813e5fc6b/ss-chatbot"
 local runtimeGlobals = (getgenv and getgenv()) or _G
+
+-- Kill any previously running instance before starting a new one
+if type(runtimeGlobals.__SSChatbotKill) == "function" then
+	print("[SS Chatbot] killing previous instance...")
+	pcall(runtimeGlobals.__SSChatbotKill)
+	task.wait(0.2)
+end
+runtimeGlobals.__SSChatbotModules = runtimeGlobals.__SSChatbotModules or {}
+runtimeGlobals.__SSChatbotKill = function()
+	local mods = runtimeGlobals.__SSChatbotModules or {}
+	if mods.Raycasting then
+		pcall(function() mods.Raycasting.StopDomeMapping() end)
+		pcall(function() mods.Raycasting.StopNoclipMapping() end)
+	end
+	if mods.Pathfinding then
+		pcall(function() mods.Pathfinding.Stop() end)
+	end
+	runtimeGlobals.__SSChatbotModules = {}
+	runtimeGlobals.__SSChatbotKill = nil
+end
+
 local USER_OPENROUTER_KEY = runtimeGlobals.SS_CHATBOT_OPENROUTER_KEY
 local DEFAULT_OPENROUTER_KEY = (type(USER_OPENROUTER_KEY) == "string" and USER_OPENROUTER_KEY ~= "" and USER_OPENROUTER_KEY)
 	or "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"
@@ -1416,8 +1437,14 @@ source = source:gsub(
 source = source:gsub(
 	'LoadedModules%.Pathfinding = module%s*\n%s*Rayfield:Notify%({',
 	function()
-		return 'LoadedModules.Pathfinding = module\n                  if LoadedModules.Raycasting and type(module.SetRaycastingModule) == "function" then\n                     module.SetRaycastingModule(LoadedModules.Raycasting)\n                  end\n                  Rayfield:Notify({'
+		return 'LoadedModules.Pathfinding = module\n                  ;(function() local g = (getgenv and getgenv()) or _G; if g.__SSChatbotModules then g.__SSChatbotModules.Pathfinding = module end end)()\n                  if LoadedModules.Raycasting and type(module.SetRaycastingModule) == "function" then\n                     module.SetRaycastingModule(LoadedModules.Raycasting)\n                  end\n                  Rayfield:Notify({'
 	end,
+	1
+)
+
+source = source:gsub(
+	'LoadedModules%.Raycasting = module',
+	'LoadedModules.Raycasting = module\n               ;(function() local g = (getgenv and getgenv()) or _G; if g.__SSChatbotModules then g.__SSChatbotModules.Raycasting = module end end)()',
 	1
 )
 
