@@ -335,15 +335,32 @@ local function PerformRaycast(origin, direction, distance, useCache)
     local raycastParams = RaycastParams.new()
     raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
     local character = GetCharacter()
-    if character then
-        raycastParams.FilterDescendantsInstances = {character}
-    end
+    local excludeList = character and {character} or {}
+    raycastParams.FilterDescendantsInstances = excludeList
     raycastParams.IgnoreWater = not Config.WaterDetection
-    
-    -- Perform raycast
+
+    -- Perform raycast, piercing through CanCollide=false parts so invisible/
+    -- decorative geometry is not mistaken for a real wall.
     local result = workspace:Raycast(origin, direction * distance, raycastParams)
     Stats.totalRaycasts = Stats.totalRaycasts + 1
-    
+
+    local maxPierces = 8
+    local pierces = 0
+    while result and result.Instance
+          and result.Instance:IsA("BasePart")
+          and not result.Instance.CanCollide
+          and pierces < maxPierces do
+        -- Extend the exclude list with this non-collidable part and recast
+        local extended = {}
+        for i = 1, #excludeList do extended[i] = excludeList[i] end
+        extended[#extended + 1] = result.Instance
+        excludeList = extended
+        raycastParams.FilterDescendantsInstances = excludeList
+        result = workspace:Raycast(origin, direction * distance, raycastParams)
+        Stats.totalRaycasts = Stats.totalRaycasts + 1
+        pierces = pierces + 1
+    end
+
     -- Cache result
     if useCache then
         local cacheKey = CreateCacheKey(origin, direction, distance)
@@ -352,7 +369,7 @@ local function PerformRaycast(origin, direction, distance, useCache)
             time = tick()
         }
     end
-    
+
     return result
 end
 
