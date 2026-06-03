@@ -1063,7 +1063,7 @@ end
 source = source:gsub(
 	'MemoryTab = Window:CreateTab%("Memory", 4483362458%)%s*\n%s*local MemorySection = MemoryTab:CreateSection%("Memory Statistics"%)',
 	function()
-		return 'MemoryTab = Window:CreateTab("Memory", 4483362458)\n\ndo\nlocal MemorySection = MemoryTab:CreateSection("Memory Statistics")'
+		return 'MemoryTab = Window:CreateTab("Memory", 4483362458)\n\n;(function()\nlocal MemorySection = MemoryTab:CreateSection("Memory Statistics")'
 	end,
 	1
 )
@@ -1074,7 +1074,7 @@ source = source:gsub(
 		return 'local GlobalMemorySlider = MemoryTab:CreateSlider({' .. sliderBody
 			.. '\n})\n\n'
 			.. '-- Initialize memory stats display while the memory UI locals are still in scope.\n'
-			.. 'UpdateMemoryStats()\nend\n\n'
+			.. 'UpdateMemoryStats()\nend)()\n\n'
 			.. '-- ========================================\n-- TAB 7: SETTINGS & INFO'
 	end,
 	1
