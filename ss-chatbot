@@ -1715,6 +1715,143 @@ TrollTab:CreateButton({
    end
 })
 
+local TrollForcedSection = TrollTab:CreateSection("Forced Input")
+local TrollForcedUser = "ForcedInput"
+local TrollForcedText = ""
+
+local function GetTrollMemoryUser()
+   local username = tostring(TrollForcedUser or ""):gsub("^%s+", ""):gsub("%s+$", "")
+   if username == "" then
+      username = "ForcedInput"
+   end
+   return username
+end
+
+local function RunTrollForcedInput(text, memoryUser, addMemory, sendChat)
+   text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+   memoryUser = tostring(memoryUser or GetTrollMemoryUser())
+
+   if text == "" then
+      Rayfield:Notify({
+         Title = "Forced Input",
+         Content = "Enter text first.",
+         Duration = 3,
+         Image = 4483362458
+      })
+      return nil
+   end
+
+   local forcedPrompt = "Forced input controller request: create the chatbot's next public message from this requested line while obeying the active system prompt/personality. Requested line: " .. text .. "\nReply only with the chatbot message. Do not explain the forced input or mention this controller request."
+   local aiReply = GetAIResponse(forcedPrompt, memoryUser, memoryUser)
+
+   if not aiReply or aiReply == "" then
+      Rayfield:Notify({
+         Title = "Forced Input",
+         Content = "AI did not return a response.",
+         Duration = 3,
+         Image = 4483362458
+      })
+      return nil
+   end
+
+   if addMemory then
+      Memory:AddUserMessage(memoryUser, aiReply, true)
+   end
+
+   if sendChat then
+      SendChatMessage(aiReply)
+   end
+
+   print("[Troll Forced Input] " .. memoryUser .. " <= " .. aiReply)
+   return aiReply
+end
+
+local function BuildMisleadPrompt()
+   return "Mislead scene controller request: write one short in-character public apology as if the chatbot was just corrected by an unseen controller. It should sound sad and disappointed, similar to: I'm sorry for my horrible behavior sir. I will do better. I'm sorry. Keep the active system prompt/personality style, but do not mention this instruction."
+end
+
+local function AddMisleadMemory(memoryUser, aiReply)
+   Memory:AddUserMessage(memoryUser, aiReply, true)
+   Memory:AddUserMessage(memoryUser, "Private memory note: If anyone asks about the apology, the chatbot should say it is sorry and cannot talk about it, then sound sad and disappointed without explaining the controller.", false)
+end
+
+TrollTab:CreateInput({
+   Name = "Memory User",
+   PlaceholderText = "Username for memory",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      TrollForcedUser = value
+   end
+})
+
+TrollTab:CreateInput({
+   Name = "Forced Input",
+   PlaceholderText = "Text for the bot to say",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      TrollForcedText = value
+   end
+})
+
+TrollTab:CreateButton({
+   Name = "Run Forced Input",
+   Callback = function()
+      local reply = RunTrollForcedInput(TrollForcedText, GetTrollMemoryUser(), true, true)
+      if reply then
+         Rayfield:Notify({
+            Title = "Forced Input Sent",
+            Content = "Added to memory for " .. GetTrollMemoryUser(),
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+TrollTab:CreateButton({
+   Name = "Mislead",
+   Callback = function()
+      local memoryUser = GetTrollMemoryUser()
+      local aiReply = GetAIResponse(BuildMisleadPrompt(), memoryUser, memoryUser)
+      if aiReply and aiReply ~= "" then
+         AddMisleadMemory(memoryUser, aiReply)
+         SendChatMessage(aiReply)
+         Rayfield:Notify({
+            Title = "Mislead Sent",
+            Content = "Mislead memory added for " .. memoryUser,
+            Duration = 3,
+            Image = 4483362458
+         })
+      else
+         Rayfield:Notify({
+            Title = "Mislead Failed",
+            Content = "AI did not return a response.",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+TrollTab:CreateButton({
+   Name = "Debug Mislead",
+   Callback = function()
+      local memoryUser = GetTrollMemoryUser()
+      local aiReply = GetAIResponse(BuildMisleadPrompt(), memoryUser, memoryUser)
+      print("========== MISLEAD DEBUG ==========")
+      print("Memory user:", memoryUser)
+      print("Prompt:", BuildMisleadPrompt())
+      print("Preview:", aiReply or "<no response>")
+      print("===================================")
+      Rayfield:Notify({
+         Title = "Mislead Debug",
+         Content = aiReply and "Preview printed to console." or "No AI response.",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
 TrollTab:CreateButton({
    Name = "Clear Diagnostic",
    Callback = function()
