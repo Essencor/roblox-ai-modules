@@ -1186,21 +1186,25 @@ end
 -- NOCLIP SPHERE MAPPING (WALL-PENETRATING)
 -- ===================================
 
--- Build a perfectly even Fibonacci sphere of N directions.
--- Unlike a yaw/pitch grid, this has zero pole-clustering — every ray
--- covers exactly the same solid angle of space.
+-- Build a sphere of directions sweeping top-to-bottom in horizontal rings.
+-- Each latitude band completes a full 360° sweep before descending to the next.
+-- vertSteps rings from pole to pole; each ring has horzSteps evenly spaced rays.
 local function ComputeFibonacciSphere(count)
     local directions = {}
-    local goldenRatio = (1 + math.sqrt(5)) / 2
-    for i = 0, count - 1 do
-        local theta = math.acos(1 - 2 * (i + 0.5) / count)
-        local phi   = 2 * math.pi * i / goldenRatio
+    local vertSteps = math.max(2, math.round(math.sqrt(count / 2)))
+    local horzSteps = math.max(1, math.round(count / vertSteps))
+    for v = 0, vertSteps - 1 do
+        local theta = math.pi * (v + 0.5) / vertSteps   -- top (0) → bottom (π)
         local sinT  = math.sin(theta)
-        table.insert(directions, Vector3.new(
-            sinT * math.cos(phi),
-            math.cos(theta),
-            sinT * math.sin(phi)
-        ))
+        local cosT  = math.cos(theta)
+        for h = 0, horzSteps - 1 do
+            local phi = 2 * math.pi * h / horzSteps
+            table.insert(directions, Vector3.new(
+                sinT * math.cos(phi),
+                cosT,
+                sinT * math.sin(phi)
+            ))
+        end
     end
     return directions
 end
