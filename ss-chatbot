@@ -918,7 +918,7 @@ end
 local function PushTrollDiagnostic(title, line)
    TrollDiagnosticsStatus:Set(line)
    warn("[SS Diagnostics] " .. line)
-   local chatLine = "[DIAGNOSTIC] " .. tostring(line)
+   local chatLine = tostring(line)
    local sentToChat = false
 
    if type(SendChatMessage) == "function" then
