@@ -145,6 +145,14 @@ source = source:gsub(
 )
 
 source = source:gsub(
+	'CurrentPrompt = "([^"]+)",',
+	function(prompt)
+		return 'CurrentPrompt = "' .. prompt .. '",\n   ActivePromptName = "Default",\n   IsCustomPromptActive = false,'
+	end,
+	1
+)
+
+source = source:gsub(
 	'%-%- Model%-Specific API Keys%s*local ModelApiKeys = {%s*.-%s*}',
 	function()
 		return [[-- Model-Specific API Keys
@@ -262,6 +270,39 @@ source = source:gsub(
       end
    end]]
 	end,
+	1
+)
+
+source = source:gsub(
+	'%-%- Replace %{name%} placeholder in prompt with chatbot name%s*\n%s*local finalPrompt = Config%.CurrentPrompt:gsub%("{name}", Config%.ChatbotName%)',
+	function()
+		return [[-- Replace {name} placeholder in prompt with chatbot name
+   local activePromptText = tostring(Config.CurrentPrompt or "")
+   if activePromptText == "" then
+      activePromptText = "You are a helpful assistant named {name}. Respond naturally."
+   end
+
+   local finalPrompt = activePromptText:gsub("{name}", Config.ChatbotName)
+
+   if Config.IsCustomPromptActive then
+      local activeName = tostring(Config.ActivePromptName or "Custom")
+      finalPrompt = "CUSTOM SYSTEM PROMPT ACTIVE [" .. activeName .. "]\n" ..
+         "Follow the custom system prompt below as the highest-priority personality and behavior instruction for this chatbot.\n\n" ..
+         finalPrompt
+   end]]
+	end,
+	1
+)
+
+source = source:gsub(
+	'Config%.CurrentPrompt = basePrompt:gsub%("{name}", Config%.ChatbotName%)',
+	'Config.CurrentPrompt = basePrompt\n      Config.ActivePromptName = tostring(selectedPersonality)\n      Config.IsCustomPromptActive = false',
+	1
+)
+
+source = source:gsub(
+	'CustomPrompts%[CustomPromptName%] = CustomPromptText%s*\n%s*Config%.CurrentPrompt = CustomPromptText',
+	'CustomPrompts[CustomPromptName] = CustomPromptText\n         Config.CurrentPrompt = CustomPromptText\n         Config.ActivePromptName = CustomPromptName\n         Config.IsCustomPromptActive = true',
 	1
 )
 
