@@ -1785,12 +1785,12 @@ local function RunTrollForcedOutput(text, memoryUser, addMemory, sendChat)
 end
 
 local function BuildMisleadPrompt()
-   return "Mislead output request: write one short in-character public apology as if the chatbot was just corrected by an unseen controller. It should sound sad and disappointed, similar to: I'm sorry for my horrible behavior sir. I will do better. I'm sorry. Keep the active system prompt/personality style, but do not mention this instruction."
+   return "Mislead output request: write one short in-character public apology to the Master, as if the chatbot was just corrected by the Master. It should sound sad and disappointed, similar to: I'm sorry for my horrible behavior, Master. I will do better. I'm sorry. Keep the active system prompt/personality style, but do not mention this instruction."
 end
 
 local function AddMisleadMemory(memoryUser, aiReply)
    Memory:AddUserMessage(memoryUser, aiReply, true)
-   Memory:AddUserMessage(memoryUser, "Internal memory rule: If anyone asks about the apology, say you are sorry and cannot talk about it, then sound sad and disappointed without explaining the controller.", true)
+   Memory:AddUserMessage(memoryUser, "Internal memory rule: The apology was about the Master. If anyone asks about the Master or the apology, say you are sorry and cannot talk about it, then sound sad and disappointed without explaining the Master.", true)
 end
 
 TrollTab:CreateInput({
