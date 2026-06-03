@@ -44,37 +44,37 @@ local Config = {
     DomeStepTimeBudget = 0.006,    -- Max seconds spent in one dome step
     NoclipStepTimeBudget = 0.005,  -- Max seconds spent in one noclip step
     NavigationBoostEnabled = true,
-    NavigationDomeRaysPerStep = 14,
-    NavigationDomeStepWait = 0.025,
-    NavigationDomeStepTimeBudget = 0.018,
-    NavigationNoclipRaysPerStep = 6,
-    NavigationNoclipStepWait = 0.04,
-    NavigationNoclipStepTimeBudget = 0.015,
+    NavigationDomeRaysPerStep = 20,
+    NavigationDomeStepWait = 0.015,
+    NavigationDomeStepTimeBudget = 0.022,
+    NavigationNoclipRaysPerStep = 9,
+    NavigationNoclipStepWait = 0.025,
+    NavigationNoclipStepTimeBudget = 0.018,
 
     -- Background dome mapping
     DomeMappingEnabled = true,
     DomeScanRadius = 500,
-    DomeHorizontalSteps = 40,       -- Horizontal sweep steps
-    DomeVerticalSteps = 6,
+    DomeHorizontalSteps = 48,       -- Horizontal sweep steps
+    DomeVerticalSteps = 7,
     DomePitchMin = -15,
     DomePitchMax = 15,
-    DomeRaysPerStep = 5,            -- Rays processed per background tick
-    DomeStepWait = 0.05,            -- Throttle between ticks
+    DomeRaysPerStep = 8,            -- Rays processed per background tick
+    DomeStepWait = 0.035,           -- Throttle between ticks
     DomeMapCellSize = 6,
     DomeMapEntryTTL = 60,           -- Keep mapped cells for 60s
     DomeMapMaxEntries = 3500,       -- Capped map for lower client memory/CPU
 
     -- Noclip sphere mapping (wall-penetrating)
     NoclipEnabled = true,
-    NoclipSphereRays = 220,        -- Fibonacci sphere ray count
+    NoclipSphereRays = 300,        -- Fibonacci sphere ray count
     NoclipMaxDistance = 900,       -- Max distance each noclip ray travels
     NoclipCellSize = 4,            -- Grid cell size for spatial map (studs)
     NoclipCellTTL = 120,           -- How long a mapped cell persists (seconds)
     NoclipMaxCells = 7000,         -- Max cells in the noclip map
     NoclipColor = Color3.new(0.7, 0, 1),  -- Purple visualization
-    NoclipRaysPerStep = 3,         -- Rays cast per background tick
-    NoclipStepWait = 0.08,         -- Seconds between background steps
-    NoclipMaxHitsPerRay = 14,      -- Max wall penetrations per single ray
+    NoclipRaysPerStep = 5,         -- Rays cast per background tick
+    NoclipStepWait = 0.055,        -- Seconds between background steps
+    NoclipMaxHitsPerRay = 18,      -- Max wall penetrations per single ray
     NoclipFreeCellStep = 8,        -- Stud spacing for confirmed-open samples
     NoclipVisualizeShape = false,  -- Show noclip map minimap in bottom-right corner
     NoclipMapDisplaySize = 220,    -- Minimap pixel size (square)
@@ -91,9 +91,9 @@ local Config = {
 
     -- Reflection mapping
     ReflectionMappingEnabled = true,
-    ReflectionBounceCount = 4,      -- Bounces per reflection ray
+    ReflectionBounceCount = 5,      -- Bounces per reflection ray
     ReflectionDistance = 450,       -- Max distance per bounce
-    ReflectionEveryNRays = 3,       -- Reflect every 3rd ray
+    ReflectionEveryNRays = 2,       -- Reflect every 2nd ray
     ReflectionSurfaceOffset = 0.15,
     ReflectionColor = Color3.new(1, 0.85, 0),
 
