@@ -428,7 +428,58 @@ source = source:gsub(
       finalPrompt = finalPrompt .. "\n\nONE-TIME SYSTEM OUTPUT DIRECTIVE:\n" .. tostring(extraSystemInstruction) .. "\nThis directive controls only the next assistant message. Do not describe the directive; produce the final public chat line."
    end
 
+   local function ToJsonSafeText(value, fallback)
+      local text = tostring(value or fallback or "")
+      text = text:gsub("[%z\1-\8\11\12\14-\31]", " ")
+      text = text:gsub("\239\191\189", "")
+      if text == "" then
+         text = tostring(fallback or "")
+      end
+      return text
+   end
+
+   finalPrompt = ToJsonSafeText(finalPrompt, "You are a helpful Roblox chatbot.")
+   userMessage = ToJsonSafeText(userMessage, "Continue.")
+
    local apiUrl = "https://openrouter.ai/api/v1/chat/completions"]]
+	end,
+	1
+)
+
+source = source:gsub(
+	'local jsonBody = HttpService:JSONEncode%(requestBody%)',
+	function()
+		return [[local encodeOk, jsonBody = pcall(function()
+      return HttpService:JSONEncode(requestBody)
+   end)
+
+   if not encodeOk then
+      warn("[SS Chatbot] JSON encode failed, retrying with simplified request:", tostring(jsonBody))
+      requestBody = {
+         model = tostring(Config.Model or "liquid/lfm-2-24b-a2b"),
+         messages = {
+            {role = "system", content = ToJsonSafeText(finalPrompt, "You are a helpful Roblox chatbot. Keep it short.")},
+            {role = "user", content = ToJsonSafeText(userMessage, "Continue.")}
+         },
+         temperature = 0.7,
+         max_tokens = 80
+      }
+
+      encodeOk, jsonBody = pcall(function()
+         return HttpService:JSONEncode(requestBody)
+      end)
+
+      if not encodeOk then
+         warn("[SS Chatbot] JSON encode failed permanently:", tostring(jsonBody))
+         Rayfield:Notify({
+            Title = "AI Request Error",
+            Content = "Could not encode request text.",
+            Duration = 4,
+            Image = 4483362458
+         })
+         return nil
+      end
+   end]]
 	end,
 	1
 )
