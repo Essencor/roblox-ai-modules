@@ -153,6 +153,12 @@ source = source:gsub(
 )
 
 source = source:gsub(
+	'SpamWindow = 10%s*%-%- Time window %(seconds%) for spam detection',
+	'SpamWindow = 10,       -- Time window (seconds) for spam detection\n   WhitelistOnlyChat = false,\n   ChatWhitelist = {},\n   ChatBlacklist = {}',
+	1
+)
+
+source = source:gsub(
 	'%-%- Model%-Specific API Keys%s*local ModelApiKeys = {%s*.-%s*}',
 	function()
 		return [[-- Model-Specific API Keys
@@ -274,6 +280,61 @@ source = source:gsub(
 )
 
 source = source:gsub(
+	'local function FindNearestPlayer%(%)',
+	function()
+		return [[local function NormalizeAccessName(username)
+   return tostring(username or ""):lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("^@", "")
+end
+
+local function SetAccessListEntry(list, username, enabled)
+   local key = NormalizeAccessName(username)
+   if key == "" then
+      return false
+   end
+   list[key] = enabled and true or nil
+   return true
+end
+
+local function IsAccessListEntry(list, username)
+   return list[NormalizeAccessName(username)] == true
+end
+
+local function CountAccessList(list)
+   local count = 0
+   for _ in pairs(list) do
+      count = count + 1
+   end
+   return count
+end
+
+local function CanPlayerUseChatbot(player)
+   if not player then
+      return false, "no player"
+   end
+
+   if IsAccessListEntry(Config.ChatBlacklist, player.Name) then
+      return false, "blacklisted"
+   end
+
+   if Config.WhitelistOnlyChat and not IsAccessListEntry(Config.ChatWhitelist, player.Name) then
+      return false, "not whitelisted"
+   end
+
+   return true, "allowed"
+end
+
+local function FindNearestPlayer()]]
+	end,
+	1
+)
+
+source = source:gsub(
+	'if sender and sender ~= LocalPlayer then%s*\n%s*%-%- AGE GROUP CHECK %(13%+ vs <13%)',
+	'if sender and sender ~= LocalPlayer then\n            local accessAllowed, accessReason = CanPlayerUseChatbot(sender)\n            if not accessAllowed then\n               print(string.format("Access control blocked %s: %s", sender.Name, accessReason))\n               return\n            end\n\n            -- AGE GROUP CHECK (13+ vs <13)',
+	1
+)
+
+source = source:gsub(
 	'%-%- Replace %{name%} placeholder in prompt with chatbot name%s*\n%s*local finalPrompt = Config%.CurrentPrompt:gsub%("{name}", Config%.ChatbotName%)',
 	function()
 		return [[-- Replace {name} placeholder in prompt with chatbot name
@@ -303,6 +364,129 @@ source = source:gsub(
 source = source:gsub(
 	'CustomPrompts%[CustomPromptName%] = CustomPromptText%s*\n%s*Config%.CurrentPrompt = CustomPromptText',
 	'CustomPrompts[CustomPromptName] = CustomPromptText\n         Config.CurrentPrompt = CustomPromptText\n         Config.ActivePromptName = CustomPromptName\n         Config.IsCustomPromptActive = true',
+	1
+)
+
+source = source:gsub(
+	'local MessageFormattingSection = ChatTab:CreateSection%("Message Formatting"%)',
+	function()
+		return [[;(function()
+local AccessControlSection = ChatTab:CreateSection("Access Control")
+
+local AccessControlInfo = ChatTab:CreateParagraph({
+   Title = "Whitelist / Blacklist",
+   Content = "Blacklist blocks users from using the chatbot. Whitelist-only mode lets only whitelisted users use it."
+})
+
+local AccessControlName = ""
+
+local AccessControlNameInput = ChatTab:CreateInput({
+   Name = "Username",
+   PlaceholderText = "Player username, without @",
+   RemoveTextAfterFocusLost = false,
+   Callback = function(value)
+      AccessControlName = value
+   end
+})
+
+local WhitelistOnlyToggle = ChatTab:CreateToggle({
+   Name = "Whitelist Chat Only",
+   CurrentValue = false,
+   Flag = "WhitelistOnlyChat",
+   Callback = function(value)
+      Config.WhitelistOnlyChat = value and true or false
+      Rayfield:Notify({
+         Title = "Access Control",
+         Content = Config.WhitelistOnlyChat and "Only whitelisted users can use chat." or "Whitelist-only mode disabled.",
+         Duration = 3,
+         Image = 4483362458
+      })
+   end
+})
+
+local AddWhitelistButton = ChatTab:CreateButton({
+   Name = "Add to Whitelist",
+   Callback = function()
+      if SetAccessListEntry(Config.ChatWhitelist, AccessControlName, true) then
+         SetAccessListEntry(Config.ChatBlacklist, AccessControlName, false)
+         Rayfield:Notify({
+            Title = "Whitelisted",
+            Content = AccessControlName .. " can use the chatbot.",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local RemoveWhitelistButton = ChatTab:CreateButton({
+   Name = "Remove from Whitelist",
+   Callback = function()
+      if SetAccessListEntry(Config.ChatWhitelist, AccessControlName, false) then
+         Rayfield:Notify({
+            Title = "Whitelist Updated",
+            Content = AccessControlName .. " removed from whitelist.",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local AddBlacklistButton = ChatTab:CreateButton({
+   Name = "Add to Blacklist",
+   Callback = function()
+      if SetAccessListEntry(Config.ChatBlacklist, AccessControlName, true) then
+         SetAccessListEntry(Config.ChatWhitelist, AccessControlName, false)
+         Rayfield:Notify({
+            Title = "Blacklisted",
+            Content = AccessControlName .. " cannot use the chatbot.",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local RemoveBlacklistButton = ChatTab:CreateButton({
+   Name = "Remove from Blacklist",
+   Callback = function()
+      if SetAccessListEntry(Config.ChatBlacklist, AccessControlName, false) then
+         Rayfield:Notify({
+            Title = "Blacklist Updated",
+            Content = AccessControlName .. " removed from blacklist.",
+            Duration = 3,
+            Image = 4483362458
+         })
+      end
+   end
+})
+
+local AccessControlStatusButton = ChatTab:CreateButton({
+   Name = "Print Access Lists",
+   Callback = function()
+      print("Whitelist-only:", Config.WhitelistOnlyChat)
+      print("Whitelisted users:", CountAccessList(Config.ChatWhitelist))
+      for username in pairs(Config.ChatWhitelist) do
+         print("  +", username)
+      end
+      print("Blacklisted users:", CountAccessList(Config.ChatBlacklist))
+      for username in pairs(Config.ChatBlacklist) do
+         print("  -", username)
+      end
+      Rayfield:Notify({
+         Title = "Access Lists",
+         Content = "Whitelist: " .. CountAccessList(Config.ChatWhitelist) .. " | Blacklist: " .. CountAccessList(Config.ChatBlacklist),
+         Duration = 4,
+         Image = 4483362458
+      })
+   end
+})
+
+end)()
+
+local MessageFormattingSection = ChatTab:CreateSection("Message Formatting")]]
+	end,
 	1
 )
 
