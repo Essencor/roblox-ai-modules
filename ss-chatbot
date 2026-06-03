@@ -776,7 +776,8 @@ source = source:gsub(
 source = source:gsub(
 	'SettingsTab = Window:CreateTab%("Settings", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%("Information"%)',
 	function()
-		return [[local TrollTab = Window:CreateTab("Troll", 4483362458)
+		return [[;(function()
+local TrollTab = Window:CreateTab("Troll", 4483362458)
 
 local TrollDiagnosticsSection = TrollTab:CreateSection("Diagnostics")
 local TrollDiagnosticsStatus = TrollTab:CreateLabel("Diagnostic status: idle")
@@ -940,9 +941,11 @@ TrollTab:CreateButton({
    end
 })
 
+end)()
+
 SettingsTab = Window:CreateTab("Settings", 4483362458)
 
-do
+;(function()
 local InfoSection = SettingsTab:CreateSection("Information")]]
 	end,
 	1
@@ -951,7 +954,7 @@ local InfoSection = SettingsTab:CreateSection("Information")]]
 source = source:gsub(
 	'%-%- Initialize memory stats display%s*\nUpdateMemoryStats%(%)%s*\n%s*Rayfield:Notify%({',
 	function()
-		return 'end\n\nRayfield:Notify({'
+		return 'end)()\n\nRayfield:Notify({'
 	end,
 	1
 )
