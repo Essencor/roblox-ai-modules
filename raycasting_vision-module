@@ -38,34 +38,37 @@ local Config = {
     ShortRangeScan = 10,           -- Close range
     
     -- Performance
-    CacheTimeout = 0.3,            -- Reduced from 0.5 for more frequent updates
-    MaxRaysPerFrame = 200,         -- Very high budget for 2x ray coverage
-    UpdateInterval = 0.15,         -- Reduced from 0.2 for faster updates
+    CacheTimeout = 0.45,
+    MaxRaysPerFrame = 80,
+    UpdateInterval = 0.25,
+    DomeStepTimeBudget = 0.006,    -- Max seconds spent in one dome step
+    NoclipStepTimeBudget = 0.005,  -- Max seconds spent in one noclip step
     
     -- Background dome mapping
     DomeMappingEnabled = true,
     DomeScanRadius = 500,
-    DomeHorizontalSteps = 36,       -- Horizontal sweep steps
-    DomeVerticalSteps = 5,
+    DomeHorizontalSteps = 30,       -- Horizontal sweep steps
+    DomeVerticalSteps = 4,
     DomePitchMin = -15,
     DomePitchMax = 15,
-    DomeRaysPerStep = 6,            -- Rays processed per background tick
-    DomeStepWait = 0.05,            -- Throttle between ticks
+    DomeRaysPerStep = 2,            -- Rays processed per background tick
+    DomeStepWait = 0.08,            -- Throttle between ticks
     DomeMapCellSize = 6,
     DomeMapEntryTTL = 60,           -- Keep mapped cells for 60s
-    DomeMapMaxEntries = 5000,       -- Huge map for entire maze exploration
+    DomeMapMaxEntries = 3500,       -- Capped map for lower client memory/CPU
 
     -- Noclip sphere mapping (wall-penetrating)
     NoclipEnabled = true,
-    NoclipSphereRays = 200,        -- Fibonacci sphere ray count
+    NoclipSphereRays = 128,        -- Fibonacci sphere ray count
     NoclipMaxDistance = 900,       -- Max distance each noclip ray travels
     NoclipCellSize = 4,            -- Grid cell size for spatial map (studs)
     NoclipCellTTL = 120,           -- How long a mapped cell persists (seconds)
-    NoclipMaxCells = 10000,        -- Max cells in the noclip map
+    NoclipMaxCells = 7000,         -- Max cells in the noclip map
     NoclipColor = Color3.new(0.7, 0, 1),  -- Purple visualization
-    NoclipRaysPerStep = 4,         -- Rays cast per background tick
-    NoclipStepWait = 0.1,          -- Seconds between background steps
-    NoclipMaxHitsPerRay = 12,      -- Max wall penetrations per single ray
+    NoclipRaysPerStep = 1,         -- Rays cast per background tick
+    NoclipStepWait = 0.14,         -- Seconds between background steps
+    NoclipMaxHitsPerRay = 8,       -- Max wall penetrations per single ray
+    NoclipFreeCellStep = 8,        -- Stud spacing for confirmed-open samples
     NoclipVisualizeShape = false,  -- Show noclip map minimap in bottom-right corner
     NoclipMapDisplaySize = 220,    -- Minimap pixel size (square)
     NoclipMapViewRadius = 250,     -- Studs shown around character in minimap
@@ -74,16 +77,16 @@ local Config = {
     -- 3D visualizer
     NoclipVisualize3D = false,
     NoclipVisualize3DRadius = 60,
-    NoclipVisualize3DMaxParts = 500,
-    NoclipVisualize3DUpdateInterval = 1.0,
+    NoclipVisualize3DMaxParts = 250,
+    NoclipVisualize3DUpdateInterval = 1.5,
     NoclipVisualize3DSize = 0.35,
     NoclipInfiniteZoom = false,    -- Remove zoom clamp when enabled
 
     -- Reflection mapping
     ReflectionMappingEnabled = true,
-    ReflectionBounceCount = 4,      -- Bounces per reflection ray
+    ReflectionBounceCount = 2,      -- Bounces per reflection ray
     ReflectionDistance = 450,       -- Max distance per bounce
-    ReflectionEveryNRays = 3,       -- Reflect every 3rd ray (not every ray)
+    ReflectionEveryNRays = 4,       -- Reflect every 4th ray (not every ray)
     ReflectionSurfaceOffset = 0.15,
     ReflectionColor = Color3.new(1, 0.85, 0),
 
@@ -147,6 +150,7 @@ local State = {
     unifiedMapOrder = {},
     -- Free-space map: cells the noclip rays traveled THROUGH (confirmed open)
     freeMap = {},
+    freeMapOrder = {},
     -- 3D visualizer
     noclip3DPartPool = {},
     noclipLast3DUpdate = 0
@@ -978,8 +982,9 @@ function RaycastingVision.StepDomeMapping(rayBudget)
     local castsUsed = 0
     local primaryRays = 0
     local startedAt = State.domeRayIndex
+    local deadline = os.clock() + math.max(0.001, Config.DomeStepTimeBudget or 0.006)
 
-    while castsUsed < rayBudget do
+    while castsUsed < rayBudget and os.clock() < deadline do
         local direction = GetDomeDirection(State.domeRayIndex)
         local shouldReflect = Config.ReflectionEveryNRays <= 1 or (State.domeRayIndex % Config.ReflectionEveryNRays == 0)
         castsUsed = castsUsed + TraceDomeRay(origin, direction, shouldReflect)
@@ -1145,14 +1150,16 @@ local function StoreFreeCell(position)
              .. math.floor(position.Z / cs)
     -- Don't overwrite a wall cell with a free cell
     if State.noclipMap[key] then return end
+    if State.freeMap[key] then return end
+
     State.freeMap[key] = position
+    table.insert(State.freeMapOrder, key)
     -- Simple cap — just overwrite oldest key by resetting when full
-    local count = 0
-    for _ in pairs(State.freeMap) do count = count + 1 end
-    if count > FREE_MAP_MAX then
-        -- Remove one arbitrary old entry
-        local oldKey = next(State.freeMap)
-        if oldKey then State.freeMap[oldKey] = nil end
+    while #State.freeMapOrder > FREE_MAP_MAX do
+        local oldKey = table.remove(State.freeMapOrder, 1)
+        if oldKey then
+            State.freeMap[oldKey] = nil
+        end
     end
 end
 
@@ -1177,7 +1184,7 @@ end
 -- Cast one noclip ray: passes through every wall, recording each solid hit.
 -- Uses an ever-growing exclude list so workspace:Raycast punches through
 -- already-hit parts on repeated casts along the same direction.
-local function CastNoclipRay(origin, direction)
+local function CastNoclipRay(origin, direction, deadline)
     local currentOrigin = origin
     local totalTraveled = 0
     local excludeList   = {}
@@ -1187,6 +1194,7 @@ local function CastNoclipRay(origin, direction)
     end
 
     for _ = 1, Config.NoclipMaxHitsPerRay do
+        if deadline and os.clock() >= deadline then break end
         if totalTraveled >= Config.NoclipMaxDistance then break end
 
         local params = RaycastParams.new()
@@ -1202,7 +1210,7 @@ local function CastNoclipRay(origin, direction)
 
         -- Sample confirmed-free cells along the ray segment before the wall.
         -- Step every NoclipCellSize studs so we get one sample per grid cell.
-        local cellStep = math.max(1, Config.NoclipCellSize)
+        local cellStep = math.max(Config.NoclipFreeCellStep or Config.NoclipCellSize, Config.NoclipCellSize)
         local steps    = math.floor(segDist / cellStep)
         for s = 1, steps - 1 do   -- exclude the endpoint (that's the wall)
             local samplePos = currentOrigin + direction * (s * cellStep)
@@ -1257,10 +1265,11 @@ function RaycastingVision.StepNoclipScan(rayBudget)
     local origin = rootPart.Position + Vector3.new(0, 2, 0)
     local total  = #State.noclipDirections
     local processed = 0
+    local deadline = os.clock() + math.max(0.001, Config.NoclipStepTimeBudget or 0.005)
 
-    while processed < rayBudget do
+    while processed < rayBudget and os.clock() < deadline do
         local dir = State.noclipDirections[(State.noclipRayIndex % total) + 1]
-        CastNoclipRay(origin, dir)
+        CastNoclipRay(origin, dir, deadline)
         processed = processed + 1
         State.noclipRayIndex = (State.noclipRayIndex + 1) % total
 
@@ -1823,6 +1832,7 @@ function RaycastingVision.ClearNoclipMap()
     State.noclipMap      = {}
     State.noclipMapOrder = {}
     State.freeMap        = {}
+    State.freeMapOrder   = {}
     State.noclipRayIndex = 0
     Log("Noclip map cleared", "INFO")
 end
@@ -2501,6 +2511,10 @@ end
 function RaycastingVision.SetConfig(key, value)
     if Config[key] ~= nil then
         Config[key] = value
+        if key == "NoclipSphereRays" then
+            State.noclipDirections = nil
+            State.noclipRayIndex = 0
+        end
         Log("Config updated: " .. key .. " = " .. tostring(value))
         return true
     else

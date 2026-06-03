@@ -68,16 +68,16 @@ local Config = {
     TerrainScanDistance = 10,  -- How far ahead to scan terrain (in studs)
     UseBackgroundDomeMapping = true,
     DomeMappingRadius = 400,
-    DomeMappingRaysPerStep = 5,
-    DomeMappingStepWait = 0.03,
-    DomeMappingReflectionBounces = 2,
-    MoveToRefreshInterval = 0.15,
+    DomeMappingRaysPerStep = 2,
+    DomeMappingStepWait = 0.1,
+    DomeMappingReflectionBounces = 1,
+    MoveToRefreshInterval = 0.2,
     UseRaycastJumpAnalysis = true,
-    JumpCheckInterval = 0.04,
+    JumpCheckInterval = 0.12,
     MinJumpCheckDistance = 1.5,
     LadderAssist = true,
     LadderScanRadius = 60,
-    LadderScanRays = 36,
+    LadderScanRays = 20,
     LadderApproachDistance = 2.8,
     LadderClimbTimeout = 7,
     LadderUseMinHeightGain = 4,
@@ -1217,7 +1217,7 @@ local function MoveTowardPosition(position, timeout, navigationId)
             lastMove = tick()
         end
 
-        task.wait(0.04)
+        task.wait(0.06)
     end
 
     return false
@@ -1246,7 +1246,7 @@ local function ConfirmWaypointArrival(waypointPos, reachedDistance, navigationId
             return false
         end
 
-        task.wait(0.03)
+        task.wait(0.05)
     end
 
     return true
@@ -1390,9 +1390,9 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             lastMoveToTime = tick()
         end
 
-        -- Wall-ahead detection: scan forward every 0.3s.
+        -- Wall-ahead detection: scan forward on a throttled cadence.
         -- If a wall is within 2.5 studs AND we haven't progressed in 1s → recover
-        if HasRaycasting() and tick() - lastWallScan >= 0.3 then
+        if HasRaycasting() and tick() - lastWallScan >= 0.55 then
             lastWallScan = tick()
             local wallScan = pcall(function()
                 local scan = RaycastingVision.ScanForward(4, 3)
@@ -1507,7 +1507,7 @@ local function MoveToWaypoint(waypoint, waypointIndex, totalWaypoints, navigatio
             lastProgressLog = tick()
         end
 
-        task.wait(0.03)  -- Very fast checking, minimal wait
+        task.wait(0.05)
     end
 
     if not reached then
@@ -1585,7 +1585,7 @@ local function FollowNoclipWaypoints(waypoints, finalGoal, navigationId)
                 end)
             end
 
-            task.wait(0.05)
+            task.wait(0.08)
         end
     end
 
