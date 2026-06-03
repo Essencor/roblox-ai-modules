@@ -377,6 +377,202 @@ source = source:gsub(
 )
 
 source = source:gsub(
+	'ACTIONS AVAILABLE: You can perform physical actions with QUANTITIES![%s%S]-Just respond naturally %- actions happen automatically%. Say "Okay, jumping 20 times!" and you WILL jump 20 times%.',
+	[==[ACTIONS AVAILABLE: You can perform physical actions only when the user clearly asks for them.
+Available actions: jump, sit, stand, dance, wave, point, cheer, laugh, follow, stop.
+When you decide an action is needed, include one hidden action tag at the END of your response:
+<ACTION:action:count>
+Examples:
+- User: "jump 5 times" -> Response: "Okay, jumping 5 times. <ACTION:jump:5>"
+- User: "wave" -> Response: "Sure, waving. <ACTION:wave:1>"
+- User: "hi" -> Response: "Hi!" and NO action tag.
+Never invent actions for normal conversation. Only use action tags for direct action requests.]==],
+	1
+)
+
+source = source:gsub(
+	'local function DetectSmartActions%(message%)%s*[%s%S]-local function PerformAction%(actionName, context%)',
+	function()
+		return [==[local function IsLikelyDirectActionRequest(message)
+   local msg = tostring(message or ""):lower()
+   local directPhrases = {
+      "jump", "hop", "leap", "sit", "sit down", "stand", "stand up", "get up",
+      "dance", "wave", "point", "cheer", "laugh", "follow me", "come here",
+      "come to me", "stop", "halt"
+   }
+
+   for _, phrase in ipairs(directPhrases) do
+      if msg == phrase or msg:find("^" .. phrase .. "%s") or msg:find("%f[%w]" .. phrase .. "%f[%W]") then
+         local commandWords = {"do", "please", "can you", "could you", "make", "perform", "times", "x"}
+         for _, word in ipairs(commandWords) do
+            if msg:find(word, 1, true) then
+               return true
+            end
+         end
+         return msg == phrase or msg:find("^" .. phrase .. "%s*%d")
+      end
+   end
+
+   return false
+end
+
+local function NormalizeActionName(actionName)
+   local action = tostring(actionName or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+   local aliases = {
+      hop = "jump",
+      leap = "jump",
+      ["sit down"] = "sit",
+      ["stand up"] = "stand",
+      ["get up"] = "stand",
+      boogie = "dance",
+      ["come here"] = "follow",
+      ["come to me"] = "follow",
+      ["follow me"] = "follow",
+      halt = "stop"
+   }
+   return aliases[action] or action
+end
+
+local function IsAllowedActionName(actionName)
+   return actionName == "jump"
+      or actionName == "sit"
+      or actionName == "stand"
+      or actionName == "dance"
+      or actionName == "wave"
+      or actionName == "point"
+      or actionName == "cheer"
+      or actionName == "laugh"
+      or actionName == "follow"
+      or actionName == "stop"
+end
+
+local function ParseActionTag(tagText)
+   local action, count = tostring(tagText or ""):match("^%s*([%a%s]+)%s*:%s*(%d+)%s*$")
+   if not action then
+      action = tostring(tagText or ""):match("^%s*([%a%s]+)%s*$")
+   end
+
+   action = NormalizeActionName(action)
+   if not IsAllowedActionName(action) then
+      return nil
+   end
+
+   count = tonumber(count) or 1
+   count = math.clamp(math.floor(count), 1, 50)
+   return {
+      action = action,
+      count = count,
+      keyword = action
+   }
+end
+
+local function ExtractActionTags(message)
+   local sequence = {}
+   local cleaned = tostring(message or ""):gsub("<ACTION:([^>]+)>", function(tagText)
+      local parsed = ParseActionTag(tagText)
+      if parsed then
+         table.insert(sequence, parsed)
+      end
+      return ""
+   end)
+
+   cleaned = cleaned:gsub("%s+$", "")
+   return sequence, cleaned
+end
+
+-- Detect actions with quantities and sequences. Only direct user commands are parsed.
+local function DetectSmartActions(message)
+   if not IsLikelyDirectActionRequest(message) then
+      return {}
+   end
+
+   local msg = tostring(message or ""):lower()
+   local actionSequence = {}
+
+   local actionPatterns = {
+      jump = {"jump", "hop", "leap"},
+      sit = {"sit down", "sit"},
+      stand = {"stand up", "get up", "stand"},
+      dance = {"dance", "boogie"},
+      wave = {"wave"},
+      point = {"point"},
+      cheer = {"cheer"},
+      laugh = {"laugh"},
+      follow = {"follow me", "come here", "come to me"},
+      stop = {"stop", "halt"}
+   }
+
+   for action, keywords in pairs(actionPatterns) do
+      for _, keyword in ipairs(keywords) do
+         if msg:find(keyword, 1, true) then
+            local count = ExtractNumber(msg, keyword)
+            count = math.min(count, 50)
+            table.insert(actionSequence, {
+               action = action,
+               count = count,
+               keyword = keyword
+            })
+            break
+         end
+      end
+   end
+
+   table.sort(actionSequence, function(a, b)
+      local posA = msg:find(a.keyword, 1, true) or 9999
+      local posB = msg:find(b.keyword, 1, true) or 9999
+      return posA < posB
+   end)
+
+   return actionSequence
+end
+
+local function PerformAction(actionName, context)]==]
+	end,
+	1
+)
+
+source = source:gsub(
+	'if aiReply then%s*\n%s*%-%- Store AI\'s response in memory%s*\n%s*Memory:AddUserMessage%(sender%.Name, aiReply, true%)%s*\n%s*%s*\n%s*wait%(0%.5%) %-%- Small delay to seem more natural%s*\n%s*SendChatMessage%(aiReply%)%s*\n%s*end',
+	function()
+		return [==[if aiReply then
+                        local aiActionSequence = {}
+                        if Config.ActionsEnabled and LoadedModules.Actions then
+                           aiActionSequence, aiReply = ExtractActionTags(aiReply)
+                        else
+                           aiReply = aiReply:gsub("<ACTION:[^>]+>", ""):gsub("%s+$", "")
+                        end
+
+                        -- Store AI's visible response in memory
+                        Memory:AddUserMessage(sender.Name, aiReply, true)
+
+                        if #aiActionSequence > 0 then
+                           ExecuteActionSequence(aiActionSequence, {senderName = sender.Name})
+                        elseif directActionSequence and #directActionSequence > 0 then
+                           ExecuteActionSequence(directActionSequence, {senderName = sender.Name})
+                        end
+
+                        wait(0.5) -- Small delay to seem more natural
+                        if aiReply and aiReply ~= "" then
+                           SendChatMessage(aiReply)
+                        end
+                     end]==]
+	end,
+	1
+)
+
+source = source:gsub(
+	'%-%- Detect and execute smart action sequences%s*\n%s*if not isPathfindingCmd then%s*\n%s*local actionSequence = DetectSmartActions%(messageData%.Text%)%s*\n%s*if #actionSequence > 0 then%s*\n%s*ExecuteActionSequence%(actionSequence, {senderName = sender%.Name}%)%s*\n%s*end%s*\n%s*end',
+	function()
+		return [[-- Detect direct action intent as a fallback. Prefer AI <ACTION:...> tags to avoid duplicates.
+            local directActionSequence = {}
+            if not isPathfindingCmd and Config.ActionsEnabled and LoadedModules.Actions then
+               directActionSequence = DetectSmartActions(messageData.Text)
+            end]]
+	end,
+	1
+)
+
+source = source:gsub(
 	'local MessageFormattingSection = ChatTab:CreateSection%("Message Formatting"%)',
 	function()
 		return [[;(function()
