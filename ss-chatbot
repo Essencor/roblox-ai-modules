@@ -776,7 +776,7 @@ source = source:gsub(
 source = source:gsub(
 	'SettingsTab = Window:CreateTab%("Settings", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%("Information"%)',
 	function()
-		return 'SettingsTab = Window:CreateTab("Settings", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection("Information")'
+		return 'local TrollTab = Window:CreateTab("Troll", 4483362458)\nSettingsTab = Window:CreateTab("Settings", 4483362458)\n\ndo\nlocal InfoSection = SettingsTab:CreateSection("Information")'
 	end,
 	1
 )
