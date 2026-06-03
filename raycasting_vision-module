@@ -43,6 +43,13 @@ local Config = {
     UpdateInterval = 0.25,
     DomeStepTimeBudget = 0.006,    -- Max seconds spent in one dome step
     NoclipStepTimeBudget = 0.005,  -- Max seconds spent in one noclip step
+    NavigationBoostEnabled = true,
+    NavigationDomeRaysPerStep = 7,
+    NavigationDomeStepWait = 0.04,
+    NavigationDomeStepTimeBudget = 0.012,
+    NavigationNoclipRaysPerStep = 3,
+    NavigationNoclipStepWait = 0.06,
+    NavigationNoclipStepTimeBudget = 0.01,
     
     -- Background dome mapping
     DomeMappingEnabled = true,
@@ -153,7 +160,8 @@ local State = {
     freeMapOrder = {},
     -- 3D visualizer
     noclip3DPartPool = {},
-    noclipLast3DUpdate = 0
+    noclipLast3DUpdate = 0,
+    navigationBoostActive = false
 }
 
 -- Statistics
@@ -182,6 +190,24 @@ local Stats = {
 local function Log(message, level)
     level = level or "INFO"
     print("[RaycastVision:" .. level .. "] " .. tostring(message))
+end
+
+local function IsNavigationBoostActive()
+    return Config.NavigationBoostEnabled and State.navigationBoostActive
+end
+
+local function GetDomeStepSettings()
+    if IsNavigationBoostActive() then
+        return Config.NavigationDomeRaysPerStep, Config.NavigationDomeStepWait, Config.NavigationDomeStepTimeBudget
+    end
+    return Config.DomeRaysPerStep, Config.DomeStepWait, Config.DomeStepTimeBudget
+end
+
+local function GetNoclipStepSettings()
+    if IsNavigationBoostActive() then
+        return Config.NavigationNoclipRaysPerStep, Config.NavigationNoclipStepWait, Config.NavigationNoclipStepTimeBudget
+    end
+    return Config.NoclipRaysPerStep, Config.NoclipStepWait, Config.NoclipStepTimeBudget
 end
 
 local function GetCharacter()
@@ -982,7 +1008,8 @@ function RaycastingVision.StepDomeMapping(rayBudget)
     local castsUsed = 0
     local primaryRays = 0
     local startedAt = State.domeRayIndex
-    local deadline = os.clock() + math.max(0.001, Config.DomeStepTimeBudget or 0.006)
+    local _, _, stepTimeBudget = GetDomeStepSettings()
+    local deadline = os.clock() + math.max(0.001, stepTimeBudget or Config.DomeStepTimeBudget or 0.006)
 
     while castsUsed < rayBudget and os.clock() < deadline do
         local direction = GetDomeDirection(State.domeRayIndex)
@@ -1025,8 +1052,9 @@ function RaycastingVision.StartDomeMapping(options)
 
     task.spawn(function()
         while State.mappingActive and State.mappingGeneration == generation do
+            local raysPerStep, stepWait = GetDomeStepSettings()
             local ok, err = pcall(function()
-                RaycastingVision.StepDomeMapping(Config.DomeRaysPerStep)
+                RaycastingVision.StepDomeMapping(raysPerStep)
             end)
 
             if not ok then
@@ -1037,7 +1065,7 @@ function RaycastingVision.StartDomeMapping(options)
             -- even when noclip mapping hasn't started yet
             pcall(Update3DVisualization)
 
-            task.wait(Config.DomeStepWait)
+            task.wait(stepWait)
         end
     end)
 
@@ -1265,7 +1293,8 @@ function RaycastingVision.StepNoclipScan(rayBudget)
     local origin = rootPart.Position + Vector3.new(0, 2, 0)
     local total  = #State.noclipDirections
     local processed = 0
-    local deadline = os.clock() + math.max(0.001, Config.NoclipStepTimeBudget or 0.005)
+    local _, _, stepTimeBudget = GetNoclipStepSettings()
+    local deadline = os.clock() + math.max(0.001, stepTimeBudget or Config.NoclipStepTimeBudget or 0.005)
 
     while processed < rayBudget and os.clock() < deadline do
         local dir = State.noclipDirections[(State.noclipRayIndex % total) + 1]
@@ -1766,6 +1795,24 @@ function RaycastingVision.SetNoclipInfiniteZoom(enabled)
     Log("Noclip infinite zoom: " .. (enabled and "ENABLED" or "DISABLED"), "INFO")
 end
 
+function RaycastingVision.SetNavigationBoost(enabled)
+    State.navigationBoostActive = enabled and true or false
+
+    if State.navigationBoostActive then
+        RaycastingVision.StartDomeMapping()
+        RaycastingVision.StartNoclipMapping()
+
+        pcall(function()
+            RaycastingVision.StepDomeMapping(Config.NavigationDomeRaysPerStep)
+        end)
+        pcall(function()
+            RaycastingVision.StepNoclipScan(Config.NavigationNoclipRaysPerStep)
+        end)
+    end
+
+    Log("Navigation scan boost: " .. (State.navigationBoostActive and "ON" or "OFF"), "INFO")
+end
+
 function RaycastingVision.SetNoclipVisualizeShape(enabled)
     Config.NoclipVisualizeShape = enabled
     if enabled then
@@ -1794,8 +1841,9 @@ function RaycastingVision.StartNoclipMapping()
 
     task.spawn(function()
         while State.noclipActive and State.noclipGeneration == generation do
+            local raysPerStep, stepWait = GetNoclipStepSettings()
             local ok, err = pcall(function()
-                RaycastingVision.StepNoclipScan(Config.NoclipRaysPerStep)
+                RaycastingVision.StepNoclipScan(raysPerStep)
             end)
             if not ok then
                 Log("Noclip scan step failed: " .. tostring(err), "WARN")
@@ -1803,7 +1851,7 @@ function RaycastingVision.StartNoclipMapping()
             -- Refresh 2D minimap and 3D visualizer (both throttled internally)
             pcall(UpdateNoclipMapDisplay)
             pcall(Update3DVisualization)
-            task.wait(Config.NoclipStepWait)
+            task.wait(stepWait)
         end
     end)
 

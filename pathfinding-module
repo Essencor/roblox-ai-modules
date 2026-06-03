@@ -209,6 +209,19 @@ local function HasRaycasting()
     return RaycastingVision ~= nil and Config.UseRaycastingVision
 end
 
+local function SetRaycastNavigationBoost(enabled)
+    if not HasRaycasting() or type(RaycastingVision.SetNavigationBoost) ~= "function" then
+        return
+    end
+
+    local ok, err = pcall(function()
+        RaycastingVision.SetNavigationBoost(enabled)
+    end)
+    if not ok then
+        Log("Raycast navigation boost failed: " .. tostring(err), "WARN")
+    end
+end
+
 StartRaycastMapping = function()
     if not HasRaycasting() or not Config.UseBackgroundDomeMapping then
         return false
@@ -1838,6 +1851,7 @@ function PathfindingModule.Navigate(target, mode)
     if HasRaycasting() then
         Log("👁️  Raycasting vision: ACTIVE", "INFO")
         StartRaycastMapping()
+        SetRaycastNavigationBoost(true)
         TryUseHelpfulLadder(endPos, navigationId)
     else
         Log("⚠️  Raycasting vision: DISABLED", "WARN")
@@ -1851,6 +1865,7 @@ function PathfindingModule.Navigate(target, mode)
         end
         Log("❌ Pre-navigation scan blocked path: " .. tostring(reason), "ERROR")
         State.isNavigating = false
+        SetRaycastNavigationBoost(false)
         Stats.failedPaths = Stats.failedPaths + 1
         ClearDestinationMarker()
         return false
@@ -1973,6 +1988,7 @@ function PathfindingModule.Navigate(target, mode)
 
     local duration = tick() - navigationStartTime
     State.isNavigating = false
+    SetRaycastNavigationBoost(false)
 
     -- VERIFY we actually reached the destination, not just completed waypoints
     if success and rootPart then
@@ -2019,6 +2035,7 @@ end
 
 function PathfindingModule.Stop()
     State.navigationId = State.navigationId + 1
+    SetRaycastNavigationBoost(false)
 
     if State.isNavigating then
         Log("Stopping navigation", "INFO")
