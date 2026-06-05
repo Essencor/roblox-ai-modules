@@ -2874,34 +2874,34 @@ local function StartEventWatcher()
         while EventState.watcherActive do
             task.wait(0.5)
             local myRoot = GetRootPart()
-            if not myRoot then continue end
+            if myRoot then
+                local myPos = myRoot.Position
 
-            local myPos = myRoot.Position
-
-            pcall(function()
-                for _, part in ipairs(workspace:GetDescendants()) do
-                    if part:IsA("BasePart") and not part.Anchored then
-                        local dist = GetDistance(part.Position, myPos)
-                        if dist <= EventConfig.ProjectileScanRadius then
-                            local vel = part.AssemblyLinearVelocity.Magnitude
-                            if vel >= EventConfig.ProjectileVelocityThreshold then
-                                local isPlayerPart = false
-                                for _, plr in ipairs(Players:GetPlayers()) do
-                                    if plr.Character and part:IsDescendantOf(plr.Character) then
-                                        isPlayerPart = true
+                pcall(function()
+                    for _, part in ipairs(workspace:GetDescendants()) do
+                        if part:IsA("BasePart") and not part.Anchored then
+                            local dist = GetDistance(part.Position, myPos)
+                            if dist <= EventConfig.ProjectileScanRadius then
+                                local vel = part.AssemblyLinearVelocity.Magnitude
+                                if vel >= EventConfig.ProjectileVelocityThreshold then
+                                    local isPlayerPart = false
+                                    for _, plr in ipairs(Players:GetPlayers()) do
+                                        if plr.Character and part:IsDescendantOf(plr.Character) then
+                                            isPlayerPart = true
+                                            break
+                                        end
+                                    end
+                                    if not isPlayerPart then
+                                        EventStats.projectilesDetected = EventStats.projectilesDetected + 1
+                                        FireEvent("projectile", part.Position, dist, { velocity = vel, partName = part.Name })
                                         break
                                     end
-                                end
-                                if not isPlayerPart then
-                                    EventStats.projectilesDetected = EventStats.projectilesDetected + 1
-                                    FireEvent("projectile", part.Position, dist, { velocity = vel, partName = part.Name })
-                                    break
                                 end
                             end
                         end
                     end
-                end
-            end)
+                end)
+            end
         end
     end)
 

@@ -155,18 +155,33 @@ if source:find("SS Chatbot public loader", 1, true) then
 	error("[SS Chatbot] Source URL returned the loader instead of the original hub")
 end
 
-source = source:gsub('ApiKey = "",', 'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",', 1)
-source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
-source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
-source = source:gsub(escapePattern("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"), DEFAULT_OPENROUTER_KEY)
+-- ============================================================
+-- Patch helper: named gsub with match-count checking.
+-- Any patch that finds nothing in the hub source warns loudly
+-- instead of silently doing nothing.
+-- ============================================================
+local _patchLog = {}
+local function Patch(name, pattern, replacement, n)
+	local newSource, count = source:gsub(pattern, replacement, n)
+	source = newSource
+	if count == 0 then
+		warn("[SS Chatbot] Patch skipped (no match): " .. tostring(name))
+	end
+	_patchLog[#_patchLog + 1] = { name = name, matched = count > 0 }
+end
 
-source = source:gsub(
+Patch("p01", 'ApiKey = "",', 'ApiKey = "' .. DEFAULT_OPENROUTER_KEY .. '",', 1)
+Patch("p02", escapePattern("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"), DEFAULT_OPENROUTER_KEY)
+Patch("p03", escapePattern("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"), DEFAULT_OPENROUTER_KEY)
+Patch("p04", escapePattern("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"), DEFAULT_OPENROUTER_KEY)
+
+Patch("p05", 
 	'Model = "[^"]+",',
 	'Model = "liquid/lfm-2-24b-a2b",',
 	1
 )
 
-source = source:gsub(
+Patch("p06", 
 	'CurrentPrompt = "([^"]+)",',
 	function(prompt)
 		return 'CurrentPrompt = "' .. prompt .. '",\n   ActivePromptName = "Default",\n   IsCustomPromptActive = false,'
@@ -174,20 +189,20 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
-	'SpamWindow = 10%s*%-%- Time window %(seconds%) for spam detection',
+Patch("p07", 
+	'SpamWindow = 10,[^\n]*',
 	'SpamWindow = 10,       -- Time window (seconds) for spam detection\n   WhitelistOnlyChat = false,\n   ChatWhitelist = {},\n   ChatBlacklist = {}',
 	1
 )
 
-source = source:gsub(
-	'MaxChatLength = 200,  %-%- Roblox chat character limit',
+Patch("p08", 
+	'MaxChatLength = 200,[^\n]*',
 	'MaxChatLength = 200,  -- Roblox chat character limit\n   ResponseDelay = 2,     -- Seconds to wait for split-up chat messages',
 	1
 )
 
-source = source:gsub(
-	'local AutoGreet = {%s*\n%s*lastActivity = tick%(%),%s*%-%- Last time bot received a message%s*\n%s*greetedPlayers = {}%s*%-%- %[username%] = timestamp %(prevent re%-greeting%)%s*\n}',
+Patch("p09", 
+	'local AutoGreet%s*=%s*{[^}]+}',
 	function()
 		return [[local AutoGreet = {
    lastActivity = tick(),      -- Last time bot received a message
@@ -200,7 +215,7 @@ local ChatMessageBuffers = {}]]
 	1
 )
 
-source = source:gsub(
+Patch("p10", 
 	'%-%- Model%-Specific API Keys%s*local ModelApiKeys = {%s*.-%s*}',
 	function()
 		return [[-- Model-Specific API Keys
@@ -213,7 +228,7 @@ local ModelApiKeys = {
 	1
 )
 
-source = source:gsub(
+Patch("p11", 
 	'%-%- Available Free Models%s*local AvailableModels = {%s*.-%s*}',
 	function()
 		return [[-- Available Free Models
@@ -226,7 +241,7 @@ local AvailableModels = {
 	1
 )
 
-source = source:gsub(
+Patch("p12", 
 	'LoadedModules%.Pathfinding%.Navigate%(playerToGreet%.Name, "basic"%)[%s%S]-SendChatMessage%(greeting%)',
 	function()
 		return [[local pathTarget = playerToGreet.Character and (playerToGreet.Character:FindFirstChild("HumanoidRootPart") or playerToGreet.Character) or playerToGreet
@@ -248,7 +263,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p13", 
 	'%-%- Add memory context if user is specified%s*\n%s*if username then%s*\n%s*local userHistory = Memory:GetUserHistory%(username, 5%)%s*\n%s*%s*\n%s*if userHistory ~= "" then%s*\n%s*%-%- Use display name in prompt if available%s*\n%s*local contextName = displayName or username%s*\n%s*finalPrompt = finalPrompt %.%. "\\n\\nConversation history with " %.%. contextName %.%. ":\\n" %.%. userHistory%s*\n%s*end%s*\n%s*%s*\n%s*%-%- Add note about display name if different from username%s*\n%s*if displayName and displayName ~= username then%s*\n%s*finalPrompt = finalPrompt %.%. string%.format%("\\n\\nNote: This user\'s display name is \'%%s\' but their username is \'@%%s\'. Use their display name when addressing them%.", displayName, username%)%s*\n%s*end%s*\n%s*end',
 	function()
 		return [[-- Add memory context if user is specified
@@ -321,7 +336,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p14", 
 	'local function FindNearestPlayer%(%)',
 	function()
 		return [[local function NormalizeAccessName(username)
@@ -370,7 +385,7 @@ local function FindNearestPlayer()]]
 	1
 )
 
-source = source:gsub(
+Patch("p15", 
 	'if sender and sender ~= LocalPlayer then%s*\n%s*%-%- AGE GROUP CHECK %(13%+ vs <13%)',
 	function()
 		return [[if sender and sender ~= LocalPlayer then
@@ -385,7 +400,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p16", 
 	'%-%- Replace %{name%} placeholder in prompt with chatbot name%s*\n%s*local finalPrompt = Config%.CurrentPrompt:gsub%("{name}", Config%.ChatbotName%)',
 	function()
 		return [[-- Replace {name} placeholder in prompt with chatbot name
@@ -406,13 +421,13 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p17", 
 	'local function GetAIResponse%(userMessage, username, displayName%)',
 	'local function GetAIResponse(userMessage, username, displayName, extraSystemInstruction)',
 	1
 )
 
-source = source:gsub(
+Patch("p18", 
 	'%-%- Add character limit instruction %(varies by mode%)',
 	function()
 		return [[finalPrompt = finalPrompt .. "\n\nKNOWLEDGE BASE (answer naturally if asked about any of these — do not recite this list verbatim):\n- Your creator / who made you: You were created by Essencor, a Roblox developer who built you as part of the roblox-ai-modules project.\n- Pathfinding / how you move: You use a custom AI pathfinding system that computes waypoint routes using Roblox PathfindingService, then refines them in real-time with raycasting feedback. If you get stuck you have 8 different recovery strategies like jumping, rotating, or teleporting.\n- Vision / how you see: You have a 3D raycasting vision system that sweeps a 500-stud dome around you and uses a wall-penetrating noclip sphere (220+ rays) to map obstacles, cliffs, hazards like killbricks and lava, and whether paths are clear.\n- Stuck recovery: If you detect a wall or cliff blocking your path you automatically attempt up to 8 recovery methods including double-jumping, moving sideways, rotating 90°, and short teleports.\n- Death learning: You remember locations where you have died before and avoid those zones in future navigation.\n- LLM / AI brain: Your chat responses are generated by a large language model accessed via the OpenRouter API. You can switch between multiple free models.\n- Actions: You can perform emotes and physical actions like dancing, waving, jumping, and equipping tools while chatting."
@@ -424,7 +439,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p19", 
 	'local apiUrl = "https://openrouter%.ai/api/v1/chat/completions"',
 	function()
 		return [[if extraSystemInstruction and tostring(extraSystemInstruction) ~= "" then
@@ -449,7 +464,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p20", 
 	'local jsonBody = HttpService:JSONEncode%(requestBody%)',
 	function()
 		return [[local encodeOk, jsonBody = pcall(function()
@@ -487,19 +502,19 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p21", 
 	'Config%.CurrentPrompt = basePrompt:gsub%("{name}", Config%.ChatbotName%)',
 	'Config.CurrentPrompt = basePrompt\n      Config.ActivePromptName = tostring(selectedPersonality)\n      Config.IsCustomPromptActive = false',
 	1
 )
 
-source = source:gsub(
+Patch("p22", 
 	'CustomPrompts%[CustomPromptName%] = CustomPromptText%s*\n%s*Config%.CurrentPrompt = CustomPromptText',
 	'CustomPrompts[CustomPromptName] = CustomPromptText\n         Config.CurrentPrompt = CustomPromptText\n         Config.ActivePromptName = CustomPromptName\n         Config.IsCustomPromptActive = true',
 	1
 )
 
-source = source:gsub(
+Patch("p23", 
 	'ACTIONS AVAILABLE: You can perform physical actions with QUANTITIES![%s%S]-Just respond naturally %- actions happen automatically%. Say "Okay, jumping 20 times!" and you WILL jump 20 times%.',
 	[==[ACTIONS AVAILABLE: You may request a real action only when the user clearly asks you to do that action.
 Allowed action names only: jump, sit, stand, dance, wave, point, cheer, laugh, follow, stop.
@@ -520,7 +535,7 @@ If you are unsure whether the user asked for a real action, do not include an ac
 	1
 )
 
-source = source:gsub(
+Patch("p24", 
 	'local function DetectSmartActions%(message%)%s*[%s%S]-local function PerformAction%(actionName, context%)',
 	function()
 		return [==[local function IsLikelyDirectActionRequest(message)
@@ -681,7 +696,7 @@ local function PerformAction(actionName, context)]==]
 	1
 )
 
-source = source:gsub(
+Patch("p25", 
 	'if aiReply then%s*\n%s*%-%- Store AI\'s response in memory%s*\n%s*Memory:AddUserMessage%(sender%.Name, aiReply, true%)%s*\n%s*%s*\n%s*wait%(0%.5%) %-%- Small delay to seem more natural%s*\n%s*SendChatMessage%(aiReply%)%s*\n%s*end',
 	function()
 		return [==[if aiReply then
@@ -710,7 +725,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p26", 
 	'%-%- Detect and execute smart action sequences%s*\n%s*if not isPathfindingCmd then%s*\n%s*local actionSequence = DetectSmartActions%(messageData%.Text%)%s*\n%s*if #actionSequence > 0 then%s*\n%s*ExecuteActionSequence%(actionSequence, {senderName = sender%.Name}%)%s*\n%s*end%s*\n%s*end',
 	function()
 		return [[-- Detect direct action intent as a fallback. Prefer AI <ACTION:...> tags to avoid duplicates.
@@ -722,7 +737,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p27", 
 	'if not accessAllowed then%s*\n%s*print%(string%.format%("Access control blocked %%s: %%s", sender%.Name, accessReason%)%)%s*\n%s*return%s*\n%s*end%s*\n%s*%-%- AGE GROUP CHECK',
 	function()
 		return [==[if not accessAllowed then
@@ -774,31 +789,31 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p28", 
 	'Memory:AddUserMessage%(sender%.Name, messageData%.Text, false%)',
 	'-- User fragments are stored before the split-message wait.',
 	1
 )
 
-source = source:gsub(
+Patch("p29", 
 	'ExecutePathfindingCommand%(messageData%.Text, sender%.Name%)',
 	'ExecutePathfindingCommand(bufferedMessage, sender.Name)',
 	1
 )
 
-source = source:gsub(
+Patch("p30", 
 	'DetectSmartActions%(messageData%.Text%)',
 	'DetectSmartActions(bufferedMessage)',
 	1
 )
 
-source = source:gsub(
+Patch("p31", 
 	'GetAIResponse%(messageData%.Text, sender%.Name, displayName%)',
 	'GetAIResponse(bufferedMessage, sender.Name, displayName)',
 	1
 )
 
-source = source:gsub(
+Patch("p32", 
 	'%-%- Truncate message to fit Roblox chat limit%s*\n%-%- Format message with prefix and/or splitting%s*\nlocal function FormatMessage%(message%)',
 	function()
 		return [[local function CleanOutgoingChatText(message)
@@ -825,13 +840,13 @@ local function FormatMessage(message)]]
 	1
 )
 
-source = source:gsub(
+Patch("p33", 
 	'%-%- Format message %(may split into multiple parts%)%s*\n%s*local messageParts = FormatMessage%(message%)',
 	'-- Format message (may split into multiple parts)\n   message = CleanOutgoingChatText(message)\n   local messageParts = FormatMessage(message)',
 	1
 )
 
-source = source:gsub(
+Patch("p34", 
 	'local MessageFormattingSection = ChatTab:CreateSection%("Message Formatting"%)',
 	function()
 		return [[local ResponseDelayParagraph = ChatTab:CreateParagraph({
@@ -861,7 +876,7 @@ local MessageFormattingSection = ChatTab:CreateSection("Message Formatting")]]
 	1
 )
 
-source = source:gsub(
+Patch("p35", 
 	'local MessageFormattingSection = ChatTab:CreateSection%("Message Formatting"%)',
 	function()
 		return [[;(function()
@@ -984,7 +999,7 @@ local MessageFormattingSection = ChatTab:CreateSection("Message Formatting")]]
 	1
 )
 
-source = source:gsub(
+Patch("p36", 
 	'local function LoadModule%(moduleName%)%s*[%s%S]-local function GetModule',
 	function()
 		return [[local function LoadModule(moduleName)
@@ -1048,21 +1063,21 @@ local function GetModule]]
 	1
 )
 
-source = source:gsub(
-	'PathfindingEnabled = false,  %-%- Pathfinding module toggle',
+Patch("p37", 
+	'PathfindingEnabled = false,[^\n]*',
 	function()
 		return 'PathfindingEnabled = false,  -- Pathfinding module toggle\n   RaycastingEnabled = false,  -- Raycasting vision module toggle'
 	end,
 	1
 )
 
-source = source:gsub(
+Patch("p38", 
 	'"Pathfinding module ready! v" %.%. module%.Version',
 	'"Pathfinding module ready! v" .. tostring(module.Version or "Unknown")',
 	1
 )
 
-source = source:gsub(
+Patch("p39", 
 	'Pathfinding = "https://raw%.githubusercontent%.com/Essencor/roblox%-ai%-modules/main/pathfinding%-module"',
 	function()
 		return 'Pathfinding = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/refs/heads/main/pathfinding-module",\n   Raycasting = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/refs/heads/main/raycasting_vision-module"'
@@ -1070,7 +1085,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p40", 
 	'local function loadRemoteChunk%(url, label%).-return result%s*\nend',
 	function()
 		return [[local function loadRemoteChunk(url, label)
@@ -1193,9 +1208,9 @@ end]]
 )
 
 -- collectgarbage("collect") is blocked in Roblox — remove it
-source = source:gsub('collectgarbage%("collect"%)', 'gcinfo()', 0)
+Patch("p41", 'collectgarbage%("collect"%)', 'gcinfo()', 0)
 
-source = source:gsub(
+Patch("p42", 
 	'local apiKeyToUse = ModelApiKeys%[Config%.Model%] or Config%.ApiKey',
 	function()
 		return 'local apiKeyToUse = (Config.ApiKey ~= "" and Config.ApiKey ~= nil) and Config.ApiKey or ModelApiKeys[Config.Model]'
@@ -1205,7 +1220,7 @@ source = source:gsub(
 
 -- Fix AutoGreet toggle: it guards with Config.PathfindingEnabled which may be false
 -- at init time even when the module is loaded. Replace with a live module check.
-source = source:gsub(
+Patch("p43", 
 	'if not Config%.PathfindingEnabled then%s*\n%s*Rayfield:Notify%(%{%s*\n%s*Title = ".- Pathfinding Required".-end%s*\n%s*Config%.EnableAutoGreet = false%s*\n%s*return%s*\n%s*end',
 	function()
 		return [[if not LoadedModules.Pathfinding then
@@ -1498,7 +1513,7 @@ local InfiniteZoomToggle = ModulesTab:CreateToggle({
 
 ]==]
 
-source = source:gsub(
+Patch("p44", 
 	'%-%- ========================================%s*\n%-%- PATHFINDING MODULE%s*\n%-%- ========================================',
 	function()
 		return raycastingModuleBlock .. "-- ========================================\n-- PATHFINDING MODULE\n-- ========================================"
@@ -1506,7 +1521,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p45", 
 	'LoadedModules%.Pathfinding = module%s*\n%s*Rayfield:Notify%({',
 	function()
 		return 'LoadedModules.Pathfinding = module\n                  ;(function() local g = (getgenv and getgenv()) or _G; if g.__SSChatbotModules then g.__SSChatbotModules.Pathfinding = module end end)()\n                  if LoadedModules.Raycasting and type(module.SetRaycastingModule) == "function" then\n                     module.SetRaycastingModule(LoadedModules.Raycasting)\n                  end\n                  Rayfield:Notify({'
@@ -1514,7 +1529,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p46", 
 	'LoadedModules%.Raycasting = module',
 	'LoadedModules.Raycasting = module\n               ;(function() local g = (getgenv and getgenv()) or _G; if g.__SSChatbotModules then g.__SSChatbotModules.Raycasting = module end end)()',
 	1
@@ -1535,7 +1550,7 @@ local removedExact
 source, removedExact = source:gsub(duplicateTabBlock, "-- Tabs are created below, next to their actual UI content.", 1)
 
 if removedExact == 0 then
-	source = source:gsub(
+	Patch("p47", 
 		"%-%- Create Tabs%s*\n"
 		.. 'local ChatTab = Window:CreateTab%("Chatbot", 4483362458%)%s*\n'
 		.. 'local APITab = Window:CreateTab%("API Setup", 4483362458%)%s*\n'
@@ -1551,7 +1566,7 @@ if removedExact == 0 then
 	)
 end
 
-source = source:gsub(
+Patch("p48", 
 	'MemoryTab = Window:CreateTab%("Memory", 4483362458%)%s*\n%s*local MemorySection = MemoryTab:CreateSection%("Memory Statistics"%)',
 	function()
 		return 'MemoryTab = Window:CreateTab("Memory", 4483362458)\n\n;(function()\nlocal MemorySection = MemoryTab:CreateSection("Memory Statistics")'
@@ -1559,7 +1574,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p49", 
 	'local GlobalMemorySlider = MemoryTab:CreateSlider%({(.-)%s*\n}%)%s*\n%s*%-%- ========================================%s*\n%s*%-%- TAB 7: SETTINGS & INFO',
 	function(sliderBody)
 		return 'local GlobalMemorySlider = MemoryTab:CreateSlider({' .. sliderBody
@@ -1571,7 +1586,7 @@ source = source:gsub(
 	1
 )
 
-source = source:gsub(
+Patch("p50", 
 	'SettingsTab = Window:CreateTab%("Settings", 4483362458%)%s*\n%s*local InfoSection = SettingsTab:CreateSection%("Information"%)',
 	function()
 		return [[;(function()
@@ -1942,7 +1957,7 @@ local InfoSection = SettingsTab:CreateSection("Information")]]
 	1
 )
 
-source = source:gsub(
+Patch("p51", 
 	'%-%- Initialize memory stats display%s*\nUpdateMemoryStats%(%)%s*\n%s*Rayfield:Notify%({',
 	function()
 		return 'end)()\n\nRayfield:Notify({'
@@ -1953,7 +1968,7 @@ source = source:gsub(
 -- ============================================================
 -- PATCH: Player profiling — update profile + async LLM tone detection
 -- ============================================================
-source = source:gsub(
+Patch("p52", 
 	'Memory:AddUserMessage%(username, text, false%)',
 	function()
 		return [==[Memory:AddUserMessage(username, text, false)
@@ -2043,7 +2058,7 @@ source = source:gsub(
 -- ============================================================
 -- PATCH: Inject player profile + mood context into AI prompt
 -- ============================================================
-source = source:gsub(
+Patch("p53", 
 	'finalPrompt = finalPrompt %.%. "Use shared memory when it helps answer the current user, but do not pretend the current user said something another player said%."',
 	function()
 		return [==[finalPrompt = finalPrompt .. "Use shared memory when it helps answer the current user, but do not pretend the current user said something another player said."
@@ -2084,7 +2099,7 @@ source = source:gsub(
 -- ============================================================
 -- PATCH: Wire raycasting events into the emotion module
 -- ============================================================
-source = source:gsub(
+Patch("p54", 
 	'if Config%.RaycastingEnabled then',
 	function()
 		return [[if Config.RaycastingEnabled then
@@ -2125,6 +2140,42 @@ do
 		print("[SS Chatbot] Emotion module loaded — starting mood: calm")
 	else
 		warn("[SS Chatbot] Emotion module failed to load:", tostring(emotionResult))
+	end
+end
+
+-- Verify critical patches landed before compiling the hub
+do
+	local checks = {
+		["api-key"]         = 'ApiKey = "sk%-or',
+		["model"]           = 'liquid/lfm%-2%-24b',
+		["split-buffer"]    = 'ChatMessageBuffers',
+		["access-control"]  = 'CanPlayerUseChatbot',
+		["shared-memory"]   = 'sharedMemoryMatches',
+		["action-tags"]     = 'ExtractActionTags',
+		["knowledge-base"]  = 'KNOWLEDGE BASE',
+		["player-profiles"] = '__SSChatbotPlayerProfiles',
+		["emotion-context"] = 'GetMoodContext',
+	}
+	local misses = {}
+	for name, pat in pairs(checks) do
+		if not source:find(pat) then
+			table.insert(misses, name)
+		end
+	end
+	local patchMisses = {}
+	for _, entry in ipairs(_patchLog) do
+		if not entry.matched then
+			table.insert(patchMisses, entry.name)
+		end
+	end
+	if #misses > 0 then
+		warn("[SS Chatbot] Content validation failed: " .. table.concat(misses, ", "))
+	end
+	if #patchMisses > 0 then
+		warn("[SS Chatbot] " .. #patchMisses .. " patch(es) had no match: " .. table.concat(patchMisses, ", "))
+	end
+	if #misses == 0 and #patchMisses == 0 then
+		print("[SS Chatbot] All patch validations passed (" .. #_patchLog .. " patches)")
 	end
 end
 
