@@ -14,6 +14,7 @@ if type(runtimeGlobals.__SSChatbotKill) == "function" then
 end
 runtimeGlobals.__SSChatbotModules = runtimeGlobals.__SSChatbotModules or {}
 runtimeGlobals.__SSChatbotPlayerProfiles = runtimeGlobals.__SSChatbotPlayerProfiles or {}
+runtimeGlobals.__SSChatbotChatLog = runtimeGlobals.__SSChatbotChatLog or {}
 runtimeGlobals.__SSChatbotKill = function()
 	local mods = runtimeGlobals.__SSChatbotModules or {}
 	if mods.Raycasting then
@@ -719,6 +720,13 @@ Patch("p25",
                         wait(0.5) -- Small delay to seem more natural
                         if aiReply and aiReply ~= "" then
                            SendChatMessage(aiReply)
+                           pcall(function()
+                              local _log = (getgenv and getgenv() or _G).__SSChatbotChatLog
+                              if type(_log) == "table" then
+                                 _log[#_log + 1] = {from = "[BOT]", text = tostring(aiReply), time = tick()}
+                                 while #_log > 50 do table.remove(_log, 1) end
+                              end
+                           end)
                         end
                      end]==]
 	end,
@@ -783,6 +791,20 @@ Patch("p27",
             if bufferedMessage == "" then
                return
             end
+
+            -- Notify idle wander + log this message to shared chat log
+            pcall(function()
+               local _g = (getgenv and getgenv()) or _G
+               local _mods = _g.__SSChatbotModules or {}
+               if _mods.IdleWander then
+                  _mods.IdleWander.OnChat()
+               end
+               local _log = _g.__SSChatbotChatLog
+               if type(_log) == "table" then
+                  _log[#_log + 1] = {from = tostring(username or ""), text = tostring(bufferedMessage or ""), time = tick()}
+                  while #_log > 50 do table.remove(_log, 1) end
+               end
+            end)
 
             -- AGE GROUP CHECK]==]
 	end,
@@ -1960,7 +1982,44 @@ local InfoSection = SettingsTab:CreateSection("Information")]]
 Patch("p51", 
 	'%-%- Initialize memory stats display%s*\nUpdateMemoryStats%(%)%s*\n%s*Rayfield:Notify%({',
 	function()
-		return 'end)()\n\nRayfield:Notify({'
+		return [==[end)()
+
+;(function()
+   -- Expose SendChatMessage + start IdleWander + return greeting hook
+   local _g = (getgenv and getgenv()) or _G
+   pcall(function()
+      _g.__SSChatbotSendChat = SendChatMessage
+   end)
+   pcall(function()
+      local _mods = _g.__SSChatbotModules or {}
+      if _mods.IdleWander then
+         task.delay(3, function()
+            _mods.IdleWander.Start(_mods.Pathfinding, _mods.Actions, _mods.Emotion)
+            print("[SS Chatbot] IdleWander started")
+         end)
+      end
+   end)
+   pcall(function()
+      local _profiles = _g.__SSChatbotPlayerProfiles
+      if not _profiles then return end
+      local Players = game:GetService("Players")
+      Players.PlayerAdded:Connect(function(player)
+         pcall(function()
+            task.wait(5)
+            local username = player.Name
+            local profile = _profiles[username]
+            if profile and (profile.messageCount or 0) >= 2 then
+               local elapsed = tick() - (profile.lastSeen or 0)
+               if elapsed > 300 then
+                  SendChatMessage("Welcome back, " .. username .. "! Good to see you again.")
+               end
+            end
+         end)
+      end)
+   end)
+end)()
+
+Rayfield:Notify({]==]
 	end,
 	1
 )
@@ -2091,6 +2150,25 @@ Patch("p53",
                finalPrompt = finalPrompt .. "\n\n" .. moodCtx
             end
          end
+      end)
+
+      -- Game type context
+      pcall(function()
+         local _mods = (getgenv and getgenv() or _G).__SSChatbotModules or {}
+         if _mods.GameDetector then
+            local gameCtx = _mods.GameDetector.GetContext()
+            if gameCtx and gameCtx ~= "" then
+               finalPrompt = finalPrompt .. "\n\nGame context: " .. gameCtx
+            end
+         end
+      end)
+
+      -- Conversation summary (injected when available)
+      pcall(function()
+         local _summary = (getgenv and getgenv() or _G).__SSChatbotSessionSummary
+         if _summary and _summary ~= "" then
+            finalPrompt = finalPrompt .. "\n\nConversation summary so far: " .. _summary
+         end
       end)]==]
 	end,
 	1
@@ -2118,30 +2196,38 @@ Patch("p54",
 )
 
 -- ============================================================
--- Load emotion module before running the hub
+-- Helper: load a module from a raw GitHub URL into runtimeGlobals.__SSChatbotModules
 -- ============================================================
-do
-	local EMOTION_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/refs/heads/main/emotion-module.lua"
-	local okEmotion, emotionResult = pcall(function()
-		local emotionSrc = game:HttpGet(EMOTION_URL, true)
-		if type(emotionSrc) ~= "string" or #emotionSrc < 50 then
-			error("emotion module source too short or empty")
+local function LoadExternalModule(name, url, minKey)
+	local ok, result = pcall(function()
+		local src = game:HttpGet(url, true)
+		if type(src) ~= "string" or #src < 50 then
+			error("source too short or empty")
 		end
-		local loader, compileErr2 = loadstring(emotionSrc)
-		if not loader then
-			error("emotion compile failed: " .. tostring(compileErr2))
-		end
+		local loader, err = loadstring(src)
+		if not loader then error("compile failed: " .. tostring(err)) end
 		local ok2, mod = pcall(loader)
-		if not ok2 then error("emotion runtime failed: " .. tostring(mod)) end
+		if not ok2 then error("runtime failed: " .. tostring(mod)) end
+		if minKey and type(mod) ~= "table" then error("module did not return a table") end
 		return mod
 	end)
-	if okEmotion and type(emotionResult) == "table" then
-		runtimeGlobals.__SSChatbotModules.Emotion = emotionResult
-		print("[SS Chatbot] Emotion module loaded — starting mood: calm")
+	if ok and type(result) == "table" then
+		runtimeGlobals.__SSChatbotModules[name] = result
+		print("[SS Chatbot] " .. name .. " module loaded")
 	else
-		warn("[SS Chatbot] Emotion module failed to load:", tostring(emotionResult))
+		warn("[SS Chatbot] " .. name .. " module failed:", tostring(result))
 	end
 end
+
+local BRANCH = "refs/heads/main"
+local RAW = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/" .. BRANCH .. "/"
+
+-- ============================================================
+-- Load external modules before running the hub
+-- ============================================================
+LoadExternalModule("Emotion",      RAW .. "emotion-module.lua",       "GetMoodContext")
+LoadExternalModule("GameDetector", RAW .. "game-detector-module.lua", "GetContext")
+LoadExternalModule("IdleWander",   RAW .. "idle-wander-module.lua",   "Start")
 
 -- Verify critical patches landed before compiling the hub
 do
@@ -2155,6 +2241,8 @@ do
 		["knowledge-base"]  = 'KNOWLEDGE BASE',
 		["player-profiles"] = '__SSChatbotPlayerProfiles',
 		["emotion-context"] = 'GetMoodContext',
+		["chat-log"]        = '__SSChatbotChatLog',
+		["game-context"]    = 'GameDetector',
 	}
 	local misses = {}
 	for name, pat in pairs(checks) do
@@ -2196,4 +2284,65 @@ if not okRun then
 end
 
 print("[SS Chatbot] original hub started")
+
+-- ============================================================
+-- Conversation summarizer: runs every 5 minutes, writes to
+-- runtimeGlobals.__SSChatbotSessionSummary for prompt injection
+-- ============================================================
+task.spawn(function()
+	local SUMMARIZE_INTERVAL = 300 -- seconds
+	local MIN_LOG_ENTRIES    = 6
+
+	while true do
+		task.wait(SUMMARIZE_INTERVAL)
+		pcall(function()
+			local _log = runtimeGlobals.__SSChatbotChatLog or {}
+			if #_log < MIN_LOG_ENTRIES then return end
+
+			local lines = {}
+			for _, entry in ipairs(_log) do
+				lines[#lines + 1] = tostring(entry.from) .. ": " .. tostring(entry.text)
+			end
+			local transcript = table.concat(lines, "\n"):sub(1, 2500)
+
+			local apiKey = DEFAULT_OPENROUTER_KEY
+			if not apiKey or apiKey == "" then return end
+
+			local HttpService = game:GetService("HttpService")
+			local body = HttpService:JSONEncode({
+				model = "liquid/lfm-2-24b-a2b",
+				messages = {
+					{role = "system", content = "Summarize the following Roblox chat conversation in 2-3 sentences. Focus on topics discussed, player names, and notable events. Be concise."},
+					{role = "user",   content = transcript},
+				},
+				max_tokens  = 120,
+				temperature = 0.3,
+			})
+
+			local ok, resp = pcall(function()
+				return game:HttpRequestAsync({
+					Url     = "https://openrouter.ai/api/v1/chat/completions",
+					Method  = "POST",
+					Headers = {
+						["Authorization"] = "Bearer " .. apiKey,
+						["Content-Type"]  = "application/json",
+					},
+					Body = body,
+				})
+			end)
+			if not ok or not resp or resp.StatusCode ~= 200 then return end
+
+			local decoded = HttpService:JSONDecode(resp.Body)
+			local summary = decoded
+				and decoded.choices
+				and decoded.choices[1]
+				and decoded.choices[1].message
+				and decoded.choices[1].message.content
+			if type(summary) == "string" and #summary > 10 then
+				runtimeGlobals.__SSChatbotSessionSummary = summary
+				print("[SS Chatbot] Session summary updated (" .. #summary .. " chars)")
+			end
+		end)
+	end
+end)
 
