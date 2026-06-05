@@ -1951,15 +1951,15 @@ source = source:gsub(
 )
 
 -- ============================================================
--- PATCH: Player profiling — update profile on each user message
+-- PATCH: Player profiling — update profile + async LLM tone detection
 -- ============================================================
 source = source:gsub(
 	'Memory:AddUserMessage%(username, text, false%)',
 	function()
 		return [==[Memory:AddUserMessage(username, text, false)
 
+            -- Immediate: keyword fallback for mood + topic/count tracking
             pcall(function()
-               -- Emotion module: shift mood based on message sentiment
                local _mods = (getgenv and getgenv() or _G).__SSChatbotModules or {}
                if _mods.Emotion then
                   _mods.Emotion.OnPlayerMessage(username, text)
@@ -1967,7 +1967,6 @@ source = source:gsub(
             end)
 
             pcall(function()
-               -- Player profiling: track per-player tone, message count, and topics
                local _profiles = (getgenv and getgenv() or _G).__SSChatbotPlayerProfiles
                if not _profiles then return end
                local _profile = _profiles[username]
@@ -1978,17 +1977,6 @@ source = source:gsub(
                _profile.messageCount = (_profile.messageCount or 0) + 1
                _profile.lastSeen = tick()
                local lower = tostring(text or ""):lower()
-               local posScore, negScore = 0, 0
-               for _, w in ipairs({"hi","hello","hey","thanks","thank","cool","nice","awesome","great","good","love","fun","amazing","wow","interesting","help","please"}) do
-                  if lower:find(w, 1, true) then posScore = posScore + 1 end
-               end
-               for _, w in ipairs({"shut","bad","stupid","dumb","boring","hate","stop","useless","annoying","terrible"}) do
-                  if lower:find(w, 1, true) then negScore = negScore + 1 end
-               end
-               if posScore > negScore then _profile.tone = "friendly"
-               elseif negScore > posScore then _profile.tone = "hostile"
-               elseif lower:find("%?") then _profile.tone = "curious"
-               end
                local stopWords = {the=1,is=1,a=1,an=1,["and"]=1,["or"]=1,but=1,you=1,i=1,it=1,["in"]=1,to=1,of=1,that=1,my=1,me=1,do=1,can=1,["for"]=1,on=1,are=1,was=1,with=1,this=1}
                local topics = _profile.topics
                for word in lower:gmatch("%a%a%a+") do
@@ -1999,6 +1987,54 @@ source = source:gsub(
                   end
                end
                while #topics > 10 do table.remove(topics, 1) end
+            end)
+
+            -- Async: LLM tone classification — overrides keyword fallback once done
+            task.spawn(function()
+               pcall(function()
+                  local HttpService = game:GetService("HttpService")
+                  local apiKey = (ModelApiKeys and ModelApiKeys[Config.Model]) or Config.ApiKey or ""
+                  if apiKey == "" then return end
+                  local toneRequest = {
+                     model = Config.Model or "liquid/lfm-2-24b-a2b",
+                     messages = {
+                        {role = "system", content = "Classify the emotional tone of the following Roblox chat message with exactly one word from this list: neutral, friendly, curious, excited, annoyed, hostile, playful. Reply with only that single word and nothing else."},
+                        {role = "user", content = tostring(text or ""):sub(1, 200)}
+                     },
+                     max_tokens = 5,
+                     temperature = 0
+                  }
+                  local encodeOk, jsonBody = pcall(function() return HttpService:JSONEncode(toneRequest) end)
+                  if not encodeOk then return end
+                  local headers = {
+                     ["Content-Type"] = "application/json",
+                     ["Authorization"] = "Bearer " .. apiKey,
+                  }
+                  local httpOk, response = customHttpRequest("https://openrouter.ai/api/v1/chat/completions", "POST", headers, jsonBody)
+                  if not httpOk or type(response) ~= "string" then return end
+                  local decodeOk, decoded = pcall(function() return HttpService:JSONDecode(response) end)
+                  if not decodeOk or not decoded or not decoded.choices or not decoded.choices[1] then return end
+                  local rawTone = tostring((decoded.choices[1].message or {}).content or ""):lower():gsub("[^%a]", "")
+                  local validTones = {neutral=1, friendly=1, curious=1, excited=1, annoyed=1, hostile=1, playful=1}
+                  if not validTones[rawTone] then return end
+                  -- Update player profile tone
+                  local _profiles = (getgenv and getgenv() or _G).__SSChatbotPlayerProfiles
+                  if _profiles and _profiles[username] then
+                     _profiles[username].tone = rawTone
+                  end
+                  -- Override emotion mood with LLM result
+                  local _mods = (getgenv and getgenv() or _G).__SSChatbotModules or {}
+                  if _mods.Emotion then
+                     if rawTone == "friendly" or rawTone == "excited" or rawTone == "playful" then
+                        _mods.Emotion.SetMood("happy", 2)
+                     elseif rawTone == "curious" then
+                        _mods.Emotion.SetMood("curious", 2)
+                     elseif rawTone == "annoyed" or rawTone == "hostile" then
+                        _mods.Emotion.SetMood("annoyed", 2)
+                     end
+                  end
+                  print("[SS Chatbot] Tone [" .. tostring(username) .. "]: " .. rawTone)
+               end)
             end)]==]
 	end,
 	1
