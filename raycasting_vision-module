@@ -2740,8 +2740,236 @@ end
 -- INITIALIZATION
 -- ===================================
 
+-- ===================================
+-- EVENT AWARENESS
+-- ===================================
+
+local EventConfig = {
+    EventAwarenessEnabled      = true,
+    ProjectileScanRadius       = 80,
+    ProjectileVelocityThreshold = 50,
+    ExplosionScanRadius        = 150,
+    EventMemorySeconds         = 30,
+    MaxRecentEvents            = 20,
+}
+
+local EventState = {
+    recentEvents       = {},
+    callbacks          = {},
+    watchedCharacters  = {},
+    deathConnections   = {},
+    watcherActive      = false,
+}
+
+local EventStats = {
+    eventsDetected     = 0,
+    explosionsDetected = 0,
+    deathsDetected     = 0,
+    projectilesDetected = 0,
+}
+
+local function PruneOldEvents()
+    local cutoff = tick() - EventConfig.EventMemorySeconds
+    local i = 1
+    while i <= #EventState.recentEvents do
+        if EventState.recentEvents[i].time < cutoff then
+            table.remove(EventState.recentEvents, i)
+        else
+            i = i + 1
+        end
+    end
+end
+
+local function FireEvent(eventType, position, distance, data)
+    local event = {
+        type     = eventType,
+        position = position,
+        distance = distance or 0,
+        time     = tick(),
+        data     = data or {},
+    }
+
+    table.insert(EventState.recentEvents, event)
+    if #EventState.recentEvents > EventConfig.MaxRecentEvents then
+        table.remove(EventState.recentEvents, 1)
+    end
+
+    EventStats.eventsDetected = EventStats.eventsDetected + 1
+
+    for _, cb in ipairs(EventState.callbacks) do
+        pcall(cb, eventType, event)
+    end
+
+    Log("Event: " .. eventType .. " dist=" .. string.format("%.1f", distance or 0))
+end
+
+local function WatchCharacterForDeath(character)
+    if not character then return end
+    local charId = tostring(character)
+    if EventState.watchedCharacters[charId] then return end
+
+    local hum = character:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+
+    local conn = hum.Died:Connect(function()
+        local root   = character:FindFirstChild("HumanoidRootPart")
+        local myRoot = GetRootPart()
+        if root and myRoot then
+            local dist = GetDistance(root.Position, myRoot.Position)
+            if dist <= EventConfig.ExplosionScanRadius then
+                EventStats.deathsDetected = EventStats.deathsDetected + 1
+                FireEvent("death", root.Position, dist, { characterName = character.Name })
+            end
+        end
+        EventState.watchedCharacters[charId] = nil
+        EventState.deathConnections[charId] = nil
+    end)
+
+    EventState.watchedCharacters[charId] = true
+    EventState.deathConnections[charId] = conn
+end
+
+local function StartEventWatcher()
+    if EventState.watcherActive then return end
+    EventState.watcherActive = true
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            WatchCharacterForDeath(plr.Character)
+        end
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            plr.CharacterAdded:Connect(function(char)
+                task.wait(1)
+                WatchCharacterForDeath(char)
+            end)
+        end
+    end
+
+    Players.PlayerAdded:Connect(function(plr)
+        plr.CharacterAdded:Connect(function(char)
+            task.wait(1)
+            WatchCharacterForDeath(char)
+        end)
+    end)
+
+    workspace.DescendantAdded:Connect(function(desc)
+        if not EventState.watcherActive then return end
+        if desc:IsA("Explosion") then
+            local myRoot = GetRootPart()
+            if myRoot then
+                local dist = GetDistance(desc.Position, myRoot.Position)
+                if dist <= EventConfig.ExplosionScanRadius then
+                    EventStats.explosionsDetected = EventStats.explosionsDetected + 1
+                    FireEvent("explosion", desc.Position, dist, { blastRadius = desc.BlastRadius })
+                end
+            end
+        end
+    end)
+
+    -- Periodic scan for fast-moving projectiles
+    task.spawn(function()
+        while EventState.watcherActive do
+            task.wait(0.5)
+            local myRoot = GetRootPart()
+            if not myRoot then continue end
+
+            local myPos = myRoot.Position
+
+            pcall(function()
+                for _, part in ipairs(workspace:GetDescendants()) do
+                    if part:IsA("BasePart") and not part.Anchored then
+                        local dist = GetDistance(part.Position, myPos)
+                        if dist <= EventConfig.ProjectileScanRadius then
+                            local vel = part.AssemblyLinearVelocity.Magnitude
+                            if vel >= EventConfig.ProjectileVelocityThreshold then
+                                local isPlayerPart = false
+                                for _, plr in ipairs(Players:GetPlayers()) do
+                                    if plr.Character and part:IsDescendantOf(plr.Character) then
+                                        isPlayerPart = true
+                                        break
+                                    end
+                                end
+                                if not isPlayerPart then
+                                    EventStats.projectilesDetected = EventStats.projectilesDetected + 1
+                                    FireEvent("projectile", part.Position, dist, { velocity = vel, partName = part.Name })
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+
+    Log("Event watcher started")
+end
+
+local function StopEventWatcher()
+    EventState.watcherActive = false
+    for _, conn in pairs(EventState.deathConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    EventState.deathConnections = {}
+    EventState.watchedCharacters = {}
+    Log("Event watcher stopped")
+end
+
+-- Public event awareness API
+
+function RaycastingVision.OnEvent(callback)
+    if type(callback) == "function" then
+        table.insert(EventState.callbacks, callback)
+    end
+end
+
+function RaycastingVision.ClearEventCallbacks()
+    EventState.callbacks = {}
+end
+
+function RaycastingVision.GetRecentEvents(maxAge)
+    PruneOldEvents()
+    if not maxAge then return EventState.recentEvents end
+    local now = tick()
+    local result = {}
+    for _, ev in ipairs(EventState.recentEvents) do
+        if now - ev.time <= maxAge then
+            table.insert(result, ev)
+        end
+    end
+    return result
+end
+
+function RaycastingVision.GetEventStats()
+    return {
+        eventsDetected      = EventStats.eventsDetected,
+        explosionsDetected  = EventStats.explosionsDetected,
+        deathsDetected      = EventStats.deathsDetected,
+        projectilesDetected = EventStats.projectilesDetected,
+    }
+end
+
+function RaycastingVision.IsEventAwarenessActive()
+    return EventState.watcherActive
+end
+
+function RaycastingVision.StartEventWatcher()
+    StartEventWatcher()
+end
+
+function RaycastingVision.StopEventWatcher()
+    StopEventWatcher()
+end
+
+if EventConfig.EventAwarenessEnabled then
+    StartEventWatcher()
+end
+
 Log("Raycasting Vision Module loaded successfully!")
-Log("Features: Forward Scan, 360° Scan, Ground Detection, LOS, Terrain Profile, Hazard Detection")
+Log("Features: Forward Scan, 360° Scan, Ground Detection, LOS, Terrain Profile, Hazard Detection, Event Awareness")
 Log("Performance: Caching enabled, " .. Config.MaxRaysPerFrame .. " max rays/frame")
 
 return RaycastingVision

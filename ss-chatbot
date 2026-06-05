@@ -13,6 +13,7 @@ if type(runtimeGlobals.__SSChatbotKill) == "function" then
 	task.wait(0.2)
 end
 runtimeGlobals.__SSChatbotModules = runtimeGlobals.__SSChatbotModules or {}
+runtimeGlobals.__SSChatbotPlayerProfiles = runtimeGlobals.__SSChatbotPlayerProfiles or {}
 runtimeGlobals.__SSChatbotKill = function()
 	local mods = runtimeGlobals.__SSChatbotModules or {}
 	if mods.Raycasting then
@@ -1948,6 +1949,148 @@ source = source:gsub(
 	end,
 	1
 )
+
+-- ============================================================
+-- PATCH: Player profiling — update profile on each user message
+-- ============================================================
+source = source:gsub(
+	'Memory:AddUserMessage%(username, text, false%)',
+	function()
+		return [==[Memory:AddUserMessage(username, text, false)
+
+            pcall(function()
+               -- Emotion module: shift mood based on message sentiment
+               local _mods = (getgenv and getgenv() or _G).__SSChatbotModules or {}
+               if _mods.Emotion then
+                  _mods.Emotion.OnPlayerMessage(username, text)
+               end
+            end)
+
+            pcall(function()
+               -- Player profiling: track per-player tone, message count, and topics
+               local _profiles = (getgenv and getgenv() or _G).__SSChatbotPlayerProfiles
+               if not _profiles then return end
+               local _profile = _profiles[username]
+               if not _profile then
+                  _profile = { messageCount = 0, firstSeen = tick(), topics = {}, tone = "neutral" }
+                  _profiles[username] = _profile
+               end
+               _profile.messageCount = (_profile.messageCount or 0) + 1
+               _profile.lastSeen = tick()
+               local lower = tostring(text or ""):lower()
+               local posScore, negScore = 0, 0
+               for _, w in ipairs({"hi","hello","hey","thanks","thank","cool","nice","awesome","great","good","love","fun","amazing","wow","interesting","help","please"}) do
+                  if lower:find(w, 1, true) then posScore = posScore + 1 end
+               end
+               for _, w in ipairs({"shut","bad","stupid","dumb","boring","hate","stop","useless","annoying","terrible"}) do
+                  if lower:find(w, 1, true) then negScore = negScore + 1 end
+               end
+               if posScore > negScore then _profile.tone = "friendly"
+               elseif negScore > posScore then _profile.tone = "hostile"
+               elseif lower:find("%?") then _profile.tone = "curious"
+               end
+               local stopWords = {the=1,is=1,a=1,an=1,["and"]=1,["or"]=1,but=1,you=1,i=1,it=1,["in"]=1,to=1,of=1,that=1,my=1,me=1,do=1,can=1,["for"]=1,on=1,are=1,was=1,with=1,this=1}
+               local topics = _profile.topics
+               for word in lower:gmatch("%a%a%a+") do
+                  if not stopWords[word] then
+                     local found = false
+                     for _, t in ipairs(topics) do if t == word then found = true; break end end
+                     if not found then table.insert(topics, word) end
+                  end
+               end
+               while #topics > 10 do table.remove(topics, 1) end
+            end)]==]
+	end,
+	1
+)
+
+-- ============================================================
+-- PATCH: Inject player profile + mood context into AI prompt
+-- ============================================================
+source = source:gsub(
+	'finalPrompt = finalPrompt %.%. "Use shared memory when it helps answer the current user, but do not pretend the current user said something another player said%."',
+	function()
+		return [==[finalPrompt = finalPrompt .. "Use shared memory when it helps answer the current user, but do not pretend the current user said something another player said."
+
+      -- Player profile context
+      pcall(function()
+         local _profiles = (getgenv and getgenv() or _G).__SSChatbotPlayerProfiles or {}
+         local _profile = username and _profiles[username]
+         if _profile and (_profile.messageCount or 0) > 0 then
+            local profileLine = "\n\nPlayer profile: " .. tostring(username) .. " has chatted "
+               .. tostring(_profile.messageCount) .. " time(s) this session"
+            if _profile.tone and _profile.tone ~= "neutral" then
+               profileLine = profileLine .. " and seems " .. _profile.tone
+            end
+            if _profile.topics and #_profile.topics > 0 then
+               local n = #_profile.topics
+               local topicList = table.concat(_profile.topics, ", ", math.max(1, n - 4), n)
+               profileLine = profileLine .. ". Recent topics: " .. topicList
+            end
+            finalPrompt = finalPrompt .. profileLine .. ". Use this to personalize your response naturally."
+         end
+      end)
+
+      -- Mood context
+      pcall(function()
+         local _mods = (getgenv and getgenv() or _G).__SSChatbotModules or {}
+         if _mods.Emotion then
+            local moodCtx = _mods.Emotion.GetMoodContext()
+            if moodCtx and moodCtx ~= "" then
+               finalPrompt = finalPrompt .. "\n\n" .. moodCtx
+            end
+         end
+      end)]==]
+	end,
+	1
+)
+
+-- ============================================================
+-- PATCH: Wire raycasting events into the emotion module
+-- ============================================================
+source = source:gsub(
+	'if Config%.RaycastingEnabled then',
+	function()
+		return [[if Config.RaycastingEnabled then
+         if LoadedModules.Raycasting and LoadedModules.Raycasting.OnEvent then
+            LoadedModules.Raycasting.OnEvent(function(eventType)
+               pcall(function()
+                  local _mods = (getgenv and getgenv() or _G).__SSChatbotModules or {}
+                  if _mods.Emotion then
+                     _mods.Emotion.OnEvent(eventType)
+                  end
+               end)
+            end)
+         end]]
+	end,
+	1
+)
+
+-- ============================================================
+-- Load emotion module before running the hub
+-- ============================================================
+do
+	local EMOTION_URL = "https://raw.githubusercontent.com/Essencor/roblox-ai-modules/refs/heads/main/emotion-module.lua"
+	local okEmotion, emotionResult = pcall(function()
+		local emotionSrc = game:HttpGet(EMOTION_URL, true)
+		if type(emotionSrc) ~= "string" or #emotionSrc < 50 then
+			error("emotion module source too short or empty")
+		end
+		local loader, compileErr2 = loadstring(emotionSrc)
+		if not loader then
+			error("emotion compile failed: " .. tostring(compileErr2))
+		end
+		local ok2, mod = pcall(loader)
+		if not ok2 then error("emotion runtime failed: " .. tostring(mod)) end
+		return mod
+	end)
+	if okEmotion and type(emotionResult) == "table" then
+		runtimeGlobals.__SSChatbotModules.Emotion = emotionResult
+		print("[SS Chatbot] Emotion module loaded — starting mood: calm")
+	else
+		warn("[SS Chatbot] Emotion module failed to load:", tostring(emotionResult))
+	end
+end
 
 local chunk, compileErr = loadstring(source)
 if not chunk then
